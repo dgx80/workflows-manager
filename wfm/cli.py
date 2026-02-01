@@ -1,0 +1,451 @@
+"""CLI for cicd-workflow.
+
+Commands:
+    cicd init       Initialize workflows and global skills
+    cicd update     Update global skills and core workflows
+    cicd sync       Force re-download global skills
+    cicd list       List all workflows, agents, and skills
+    cicd status     Show extended workflows and skills info
+    cicd version    Show installed and latest version
+    cicd monitor    Real-time workflow visualization dashboard
+"""
+
+import argparse
+import os
+import sys
+
+from cicd import __version__, workflow_manager
+
+
+def main():
+    """Main entry point for cicd CLI."""
+    parser = argparse.ArgumentParser(
+        prog="cicd",
+        description="CI/CD workflows and agents for Claude Code projects"
+    )
+    parser.add_argument("-V", "--version", action="version", version=f"cicd-workflow {__version__}")
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # init command
+    init_parser = subparsers.add_parser("init", help="Initialize workflows in project")
+    init_parser.add_argument("--force", "-f", action="store_true", help="Reinitialize even if exists")
+    init_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
+
+    # update command
+    update_parser = subparsers.add_parser("update", help="Update global skills and core workflows")
+    update_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
+
+    # sync command (v2.0)
+    sync_parser = subparsers.add_parser("sync", help="Force re-download global skills")
+    sync_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
+    sync_parser.add_argument("--branch", "-b", help="Download from branch instead of release (e.g., feature/6-global-skills-architecture)")
+
+    # migrate command (v2.0)
+    migrate_parser = subparsers.add_parser("migrate", help="Migrate from old commands to global skills")
+    migrate_parser.add_argument("--remove", "-r", action="store_true", help="Remove legacy command files after migration")
+
+    # list command
+    subparsers.add_parser("list", help="List all workflows, agents, and skills")
+
+    # status command
+    subparsers.add_parser("status", help="Show extended workflows")
+
+    # version command (show installed vs latest)
+    subparsers.add_parser("version", help="Show installed and latest version")
+
+    # monitor command
+    monitor_parser = subparsers.add_parser("monitor", help="Real-time workflow visualization")
+    monitor_parser.add_argument("--serve", "-s", action="store_true", help="Start the monitor server")
+    monitor_parser.add_argument("--open", "-o", action="store_true", help="Open dashboard in browser")
+    monitor_parser.add_argument("--emit", "-e", action="store_true", help="Emit an event")
+    monitor_parser.add_argument("--agent", "-a", help="Agent name (for --emit)")
+    monitor_parser.add_argument("--action", help="Action: start, end, error (for --emit)")
+    monitor_parser.add_argument("--workflow", "-w", help="Workflow name (for --emit)")
+    monitor_parser.add_argument("--port", "-p", type=int, default=8000, help="Server port (default: 8000)")
+
+    args = parser.parse_args()
+
+    if args.command is None:
+        print_help()
+        return 0
+
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "update":
+        return cmd_update(args)
+    elif args.command == "sync":
+        return cmd_sync(args)
+    elif args.command == "migrate":
+        return cmd_migrate(args)
+    elif args.command == "list":
+        return cmd_list()
+    elif args.command == "status":
+        return cmd_status()
+    elif args.command == "version":
+        return cmd_version()
+    elif args.command == "monitor":
+        return cmd_monitor(args)
+    else:
+        print_help()
+        return 0
+
+
+def print_help():
+    """Print help message."""
+    print("cicd - CI/CD workflows for Claude Code projects")
+    print()
+    print("Commands:")
+    print("  cicd init       Initialize global skills and project workflows")
+    print("  cicd update     Update global skills and core workflows")
+    print("  cicd sync       Force re-download global skills")
+    print("  cicd migrate    Migrate from old commands to global skills")
+    print("  cicd list       List all workflows, agents, and skills")
+    print("  cicd status     Show extended workflows and skills info")
+    print("  cicd version    Show installed and latest version")
+    print("  cicd monitor    Real-time workflow visualization")
+    print()
+    print("Options (init/update/sync):")
+    print("  --force, -f     Reinitialize even if exists (init only)")
+    print("  --version, -v   Install specific version (e.g., -v v0.1.0)")
+    print()
+    print("Migration options:")
+    print("  --remove, -r    Remove legacy command files after migration")
+    print()
+    print("Monitor options:")
+    print("  --serve, -s     Start the monitor server")
+    print("  --open, -o      Open dashboard in browser")
+    print("  --emit, -e      Emit an event to the server")
+    print("  --agent, -a     Agent name (architect, coder, etc.)")
+    print("  --action        Action type (start, end, error)")
+    print("  --workflow, -w  Workflow name")
+    print()
+    print("Architecture (v2.0):")
+    print("  ~/.claude/skills/    Global skills (cicd-*)")
+    print("  ~/.claude/cicd.yaml  Global config")
+    print("  .claude/rules/       Project context (auto-loaded)")
+    print("  .cicd/core/          Workflows from GitHub (read-only)")
+    print("  .cicd/extends/       Project extensions (priority)")
+    print()
+    print(f"Source: {workflow_manager.CICD_WORKFLOW_URL}")
+
+
+def cmd_init(args):
+    """Handle init command."""
+    result = workflow_manager.init(
+        force=args.force,
+        version=getattr(args, 'release_version', None)
+    )
+    print_result(result)
+    return 0 if result["status"] in ("success", "already_initialized") else 1
+
+
+def cmd_update(args):
+    """Handle update command."""
+    result = workflow_manager.update(
+        version=getattr(args, 'release_version', None)
+    )
+    print_result(result)
+    return 0 if result["status"] in ("success", "up_to_date") else 1
+
+
+def cmd_sync(args):
+    """Handle sync command - force re-download global skills."""
+    branch = getattr(args, 'branch', None)
+    version = getattr(args, 'release_version', None)
+
+    if branch:
+        print(f"Syncing from branch: {branch}")
+
+    result = workflow_manager.sync(version=version, branch=branch)
+    print_result(result)
+
+    if result["status"] == "success":
+        skills = result.get("skills_synced", [])
+        if skills:
+            print(f"\nSynced skills: {', '.join(skills)}")
+            print(f"Location: {workflow_manager.get_global_skills_path()}")
+
+    return 0 if result["status"] == "success" else 1
+
+
+def cmd_migrate(args):
+    """Handle migrate command - migrate from old commands to global skills."""
+    # First check if migration is needed
+    detection = workflow_manager.detect_migration_needed()
+
+    if not detection["needs_migration"]:
+        if detection["has_global_skills"]:
+            print("[INFO] Global skills already installed. Use 'cicd sync' to update.")
+        else:
+            print("[INFO] No legacy commands found. Nothing to migrate.")
+        return 0
+
+    print("Migration detected:")
+    print(f"  Legacy commands: {detection['has_legacy_commands']}")
+    print(f"  Global skills: {detection['has_global_skills']}")
+    print()
+
+    # Perform migration
+    result = workflow_manager.migrate(remove_legacy=args.remove)
+    print_result(result)
+
+    if result["status"] == "success":
+        skills = result.get("migrated_skills", [])
+        if skills:
+            print(f"\nMigrated skills: {', '.join(skills)}")
+            print(f"Location: {result.get('global_skills_path')}")
+            if result.get("rules_created"):
+                print(f"Rules template: {result.get('rules_created')}")
+            if result.get("removed_files"):
+                print(f"Removed legacy files: {', '.join(result['removed_files'])}")
+
+    return 0 if result["status"] in ("success", "not_needed", "already_migrated") else 1
+
+
+def cmd_list():
+    """Handle list command."""
+    result = workflow_manager.list_workflows()
+
+    # Show version info
+    global_version = workflow_manager.get_global_installed_version()
+    local_version = result.get("version")
+
+    if global_version:
+        print(f"Global version: {global_version}")
+    if local_version and local_version != global_version:
+        print(f"Project version: {local_version}")
+    if not global_version and not local_version:
+        print("[WARN] Not initialized. Run 'cicd init'")
+    print()
+
+    # List global skills (v2.0)
+    skills = workflow_manager.list_global_skills()
+    if skills:
+        print("Global Skills (~/.claude/skills/):")
+        for skill in sorted(skills):
+            print(f"  /{ skill}")
+    else:
+        print("No global skills installed.")
+    print()
+
+    # List workflows
+    workflows = result.get("workflows", {})
+    if workflows:
+        print("Workflows (.cicd/core/):")
+        for name, info in sorted(workflows.items()):
+            source = info["source"]
+            marker = " (override)" if info.get("overridden") else ""
+            print(f"  [{source:7}] {name}{marker}")
+    else:
+        print("No workflows found.")
+
+    print()
+
+    # List agents
+    agents = result.get("agents", {})
+    if agents:
+        print("Agents:")
+        for name, info in sorted(agents.items()):
+            source = info["source"]
+            marker = " (override)" if info.get("overridden") else ""
+            print(f"  [{source:7}] {name}{marker}")
+    else:
+        print("No agents found.")
+
+    return 0
+
+
+def cmd_status():
+    """Handle status command."""
+    result = workflow_manager.status()
+
+    # Show version info (v2.0)
+    global_version = workflow_manager.get_global_installed_version()
+    local_version = result.get("version")
+
+    if not global_version and not result.get("initialized"):
+        print("[WARN] Not initialized. Run 'cicd init'")
+        return 1
+
+    print("=== CICD Status ===")
+    print()
+
+    # Global skills info
+    skills = workflow_manager.list_global_skills()
+    print(f"Global Skills: {len(skills)} installed")
+    if global_version:
+        print(f"Global Version: {global_version}")
+    print(f"Skills Path: {workflow_manager.get_global_skills_path()}")
+    print()
+
+    # Project info
+    if result.get("initialized"):
+        print(f"Project Version: {local_version or 'unknown'}")
+
+        overridden_wf = result.get("overridden_workflows", {})
+        overridden_ag = result.get("overridden_agents", {})
+        total_wf = result.get("total_workflows", 0)
+        total_ag = result.get("total_agents", 0)
+
+        print(f"Workflows: {len(overridden_wf)} extended / {total_wf} total")
+        print(f"Agents:    {len(overridden_ag)} extended / {total_ag} total")
+
+        if overridden_wf:
+            print()
+            print("Extended workflows:")
+            for name in sorted(overridden_wf.keys()):
+                print(f"  - {name}")
+
+        if overridden_ag:
+            print()
+            print("Extended agents:")
+            for name in sorted(overridden_ag.keys()):
+                print(f"  - {name}")
+    else:
+        print("Project: not initialized (global skills only)")
+
+    # Check for project rules
+    rules_path = workflow_manager.get_project_cicd_path().parent / ".claude" / "rules" / "cicd-context.md"
+    if rules_path.exists():
+        print()
+        print(f"Project Rules: {rules_path}")
+    else:
+        print()
+        print("Project Rules: not configured (run 'cicd init' to create template)")
+
+    return 0
+
+
+def cmd_version():
+    """Handle version command."""
+    # v2.0: Check both global and local versions
+    global_version = workflow_manager.get_global_installed_version()
+    local_version = workflow_manager.get_installed_version()
+    latest = workflow_manager.get_latest_version()
+
+    print(f"Global Skills: {global_version or 'not installed'}")
+    print(f"Project:       {local_version or 'not initialized'}")
+    print(f"Latest:        {latest or 'unknown'}")
+
+    installed = global_version or local_version
+    if installed and latest and installed != latest:
+        print()
+        print("Update available! Run 'cicd update'")
+
+    return 0
+
+
+def cmd_monitor(args):
+    """Handle monitor command."""
+    from cicd import monitor
+
+    if args.emit:
+        # Emit an event
+        if not args.agent:
+            print("[ERROR] --agent is required for --emit")
+            return 1
+        if not args.action:
+            print("[ERROR] --action is required for --emit")
+            return 1
+
+        # Force enable for CLI emit command
+        os.environ["CICD_MONITOR"] = "1"
+        emitter = monitor.EventEmitter(port=args.port)
+        result = emitter.emit(
+            agent=args.agent,
+            action=args.action,
+            workflow=args.workflow,
+        )
+
+        if result["status"] == "success":
+            print(f"[OK] Event emitted: {args.agent} → {args.action}")
+        elif result["status"] == "offline":
+            print(f"[WARN] {result['message']}")
+        else:
+            print(f"[ERROR] {result.get('message', 'Unknown error')}")
+        return 0
+
+    if args.serve:
+        # Start the FastAPI server with uvicorn
+        import shutil
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        print(f"Starting CICD Monitor server on port {args.port}...")
+
+        if args.open:
+            # Open browser after a short delay
+            import threading
+            import time
+            def open_browser():
+                time.sleep(2.0)
+                monitor.open_dashboard(args.port)
+            threading.Thread(target=open_browser, daemon=True).start()
+
+        # Find backend directory
+        backend_dir = Path(__file__).parent.parent / "backend"
+        if not backend_dir.exists():
+            print("[ERROR] Backend directory not found. Please install from source.")
+            return 1
+
+        # Run uvicorn (prefer uv if available)
+        try:
+            if shutil.which("uv"):
+                subprocess.run(
+                    ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(args.port)],
+                    cwd=str(backend_dir),
+                    check=True,
+                )
+            else:
+                subprocess.run(
+                    [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(args.port)],
+                    cwd=str(backend_dir),
+                    check=True,
+                )
+        except KeyboardInterrupt:
+            print("\nServer stopped.")
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] Server failed: {e}")
+            return 1
+        return 0
+
+    if args.open:
+        # Just open the dashboard
+        print(f"Opening dashboard at http://localhost:{args.port}")
+        monitor.open_dashboard(args.port)
+        return 0
+
+    # Default: show help for monitor
+    print("cicd monitor - Real-time workflow visualization")
+    print()
+    print("Usage:")
+    print("  cicd monitor --serve          Start the monitor server")
+    print("  cicd monitor --serve --open   Start server and open dashboard")
+    print("  cicd monitor --open           Open dashboard in browser")
+    print("  cicd monitor --emit ...       Emit an event")
+    print()
+    print("Emit event example:")
+    print("  cicd monitor --emit --agent architect --action start --workflow design-feature")
+    return 0
+
+
+def print_result(result: dict):
+    """Print command result."""
+    status = result.get("status", "unknown")
+
+    if status == "success":
+        print(f"[OK] {result.get('message', 'Success')}")
+    elif status == "up_to_date":
+        print(f"[OK] {result.get('message', 'Up to date')}")
+    elif status == "already_initialized":
+        print(f"[INFO] {result.get('message', 'Already initialized')}")
+    elif status == "not_initialized":
+        print(f"[WARN] {result.get('message', 'Not initialized')}")
+    else:
+        print(f"[ERROR] {result.get('message', 'Unknown error')}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

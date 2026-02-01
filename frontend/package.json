@@ -1,0 +1,26 @@
+{
+  "name": "cicd-monitor-frontend",
+  "version": "0.1.0",
+  "description": "SolidJS frontend for CICD Monitor",
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "vinxi dev",
+    "build": "vinxi build",
+    "start": "vinxi start"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.14.0",
+    "@solidjs/start": "^1.0.0",
+    "solid-js": "^1.8.0",
+    "vinxi": "^0.4.0",
+    "vis-data": "^7.1.9",
+    "vis-network": "^9.1.9"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

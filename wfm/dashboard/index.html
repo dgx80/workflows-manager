@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CICD Monitor</title>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>CICD Monitor</h1>
+        <div id="connection-status" class="status disconnected">Disconnected</div>
+    </header>
+
+    <main>
+        <div class="left-panel">
+            <div id="graph-container">
+                <div id="network"></div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="widgets">
+                <div class="widget" id="agent-widget">
+                    <div class="widget-header">Active Agent</div>
+                    <div class="widget-content">
+                        <span class="agent-icon" id="agent-icon">-</span>
+                        <span class="agent-name" id="agent-name">None</span>
+                    </div>
+                </div>
+                <div class="widget" id="workflow-widget">
+                    <div class="widget-header">Workflow</div>
+                    <div class="widget-content">
+                        <span id="workflow-name">-</span>
+                    </div>
+                </div>
+                <div class="widget" id="stats-widget">
+                    <div class="widget-header">Statistics</div>
+                    <div class="widget-content">
+                        <div>Events: <span id="event-count">0</span></div>
+                        <div>Duration: <span id="duration">-</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="timeline-container">
+                <div class="section-header">Timeline</div>
+                <div id="timeline"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="section-header">Logs</div>
+        <div id="logs"></div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
