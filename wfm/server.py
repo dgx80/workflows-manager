@@ -9,7 +9,11 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cicd.monitor import DEFAULT_HTTP_PORT, DEFAULT_WS_PORT, get_dashboard_path
+from wfm.monitor import DEFAULT_PORT, get_dashboard_path
+
+# Use single port for both HTTP and WS (FastAPI handles both)
+DEFAULT_HTTP_PORT = DEFAULT_PORT
+DEFAULT_WS_PORT = DEFAULT_PORT + 1
 
 # Store for events and connected clients
 MAX_EVENTS = 1000

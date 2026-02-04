@@ -14,7 +14,7 @@ import argparse
 import os
 import sys
 
-from cicd import __version__, workflow_manager
+from wfm import __version__, workflow_manager
 
 
 def main():
@@ -64,6 +64,22 @@ def main():
     monitor_parser.add_argument("--workflow", "-w", help="Workflow name (for --emit)")
     monitor_parser.add_argument("--port", "-p", type=int, default=8000, help="Server port (default: 8000)")
 
+    # repo command (multi-repo support)
+    repo_parser = subparsers.add_parser("repo", help="Manage workflow repositories")
+    repo_subparsers = repo_parser.add_subparsers(dest="repo_command", help="Repository commands")
+
+    # repo add
+    repo_add_parser = repo_subparsers.add_parser("add", help="Add a repository")
+    repo_add_parser.add_argument("name", help="Short name for the repo (used as skill prefix)")
+    repo_add_parser.add_argument("repo", help="GitHub repo path (e.g., owner/repo)")
+
+    # repo remove
+    repo_remove_parser = repo_subparsers.add_parser("remove", help="Remove a repository")
+    repo_remove_parser.add_argument("name", help="Name of the repository to remove")
+
+    # repo list
+    repo_subparsers.add_parser("list", help="List configured repositories")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -86,6 +102,16 @@ def main():
         return cmd_version()
     elif args.command == "monitor":
         return cmd_monitor(args)
+    elif args.command == "repo":
+        if args.repo_command == "add":
+            return cmd_repo_add(args)
+        elif args.repo_command == "remove":
+            return cmd_repo_remove(args)
+        elif args.repo_command == "list":
+            return cmd_repo_list()
+        else:
+            print("Usage: wfm repo <add|remove|list>")
+            return 1
     else:
         print_help()
         return 0
@@ -93,17 +119,23 @@ def main():
 
 def print_help():
     """Print help message."""
-    print("cicd - CI/CD workflows for Claude Code projects")
+    print("wfm - Workflow Manager for Claude Code")
     print()
     print("Commands:")
-    print("  cicd init       Initialize global skills and project workflows")
-    print("  cicd update     Update global skills and core workflows")
-    print("  cicd sync       Force re-download global skills")
-    print("  cicd migrate    Migrate from old commands to global skills")
-    print("  cicd list       List all workflows, agents, and skills")
-    print("  cicd status     Show extended workflows and skills info")
-    print("  cicd version    Show installed and latest version")
-    print("  cicd monitor    Real-time workflow visualization")
+    print("  wfm init        Initialize global skills and project workflows")
+    print("  wfm update      Update global skills and core workflows")
+    print("  wfm sync        Sync all configured repositories")
+    print("  wfm migrate     Migrate from old commands to global skills")
+    print("  wfm list        List all workflows, agents, and skills")
+    print("  wfm status      Show extended workflows and skills info")
+    print("  wfm version     Show installed and latest version")
+    print("  wfm repo        Manage workflow repositories")
+    print("  wfm monitor     Real-time workflow visualization")
+    print()
+    print("Repository commands:")
+    print("  wfm repo add <name> <owner/repo>  Add a repository")
+    print("  wfm repo remove <name>            Remove a repository")
+    print("  wfm repo list                     List configured repositories")
     print()
     print("Options (init/update/sync):")
     print("  --force, -f     Reinitialize even if exists (init only)")
@@ -120,14 +152,14 @@ def print_help():
     print("  --action        Action type (start, end, error)")
     print("  --workflow, -w  Workflow name")
     print()
-    print("Architecture (v2.0):")
-    print("  ~/.claude/skills/    Global skills (cicd-*)")
-    print("  ~/.claude/cicd.yaml  Global config")
+    print("Architecture:")
+    print("  ~/.claude/wfm.json   Repository configuration")
+    print("  ~/.claude/skills/    Global skills ({repo}-*)")
+    print("  ~/.claude/workflows/ Global workflows")
     print("  .claude/rules/       Project context (auto-loaded)")
-    print("  .cicd/core/          Workflows from GitHub (read-only)")
     print("  .cicd/extends/       Project extensions (priority)")
     print()
-    print(f"Source: {workflow_manager.CICD_WORKFLOW_URL}")
+    print(f"Default source: {workflow_manager.CICD_WORKFLOW_URL}")
 
 
 def cmd_init(args):
@@ -150,23 +182,32 @@ def cmd_update(args):
 
 
 def cmd_sync(args):
-    """Handle sync command - force re-download global skills."""
+    """Handle sync command - sync all configured repositories."""
     branch = getattr(args, 'branch', None)
     version = getattr(args, 'release_version', None)
 
     if branch:
         print(f"Syncing from branch: {branch}")
 
-    result = workflow_manager.sync(version=version, branch=branch)
-    print_result(result)
+    # Use sync_all for multi-repo support
+    result = workflow_manager.sync_all(version=version, branch=branch)
 
     if result["status"] == "success":
-        skills = result.get("skills_synced", [])
-        if skills:
-            print(f"\nSynced skills: {', '.join(skills)}")
-            print(f"Location: {workflow_manager.get_global_skills_path()}")
-
-    return 0 if result["status"] == "success" else 1
+        print(f"[OK] {result['message']}")
+        for repo_result in result.get("results", []):
+            skills = repo_result.get("skills_synced", [])
+            if skills:
+                print(f"  {repo_result['repo_name']}: {', '.join(skills)}")
+        print(f"\nLocation: {workflow_manager.get_global_skills_path()}")
+        return 0
+    elif result["status"] == "partial":
+        print(f"[WARN] {result['message']}")
+        for error in result.get("errors", []):
+            print(f"  - {error}")
+        return 1
+    else:
+        print(f"[ERROR] {result.get('message', 'Unknown error')}")
+        return 1
 
 
 def cmd_migrate(args):
@@ -216,15 +257,25 @@ def cmd_list():
     if local_version and local_version != global_version:
         print(f"Project version: {local_version}")
     if not global_version and not local_version:
-        print("[WARN] Not initialized. Run 'cicd init'")
+        print("[WARN] Not initialized. Run 'wfm init'")
     print()
 
-    # List global skills (v2.0)
-    skills = workflow_manager.list_global_skills()
+    # Show configured repos
+    repos = workflow_manager.get_configured_repos()
+    if repos:
+        print("Configured Repositories:")
+        for name, repo in repos.items():
+            print(f"  {name}: {repo}")
+        print()
+
+    # List global skills with repo source
+    skills = workflow_manager.list_global_skills_with_repo()
     if skills:
         print("Global Skills (~/.claude/skills/):")
-        for skill in sorted(skills):
-            print(f"  /{ skill}")
+        for skill_name in sorted(skills.keys()):
+            info = skills[skill_name]
+            repo = info.get("repo", "unknown")
+            print(f"  [{repo:8}] /{skill_name}")
     else:
         print("No global skills installed.")
     print()
@@ -265,15 +316,33 @@ def cmd_status():
     local_version = result.get("version")
 
     if not global_version and not result.get("initialized"):
-        print("[WARN] Not initialized. Run 'cicd init'")
+        print("[WARN] Not initialized. Run 'wfm init'")
         return 1
 
-    print("=== CICD Status ===")
+    print("=== WFM Status ===")
     print()
 
-    # Global skills info
+    # Show configured repos
+    repos = workflow_manager.get_configured_repos()
+    print(f"Configured Repositories: {len(repos)}")
+    for name, repo in repos.items():
+        print(f"  {name}: {repo}")
+    print()
+
+    # Global skills info by repo
+    skills_by_repo = workflow_manager.list_global_skills_with_repo()
     skills = workflow_manager.list_global_skills()
+
+    # Count skills per repo
+    repo_counts = {}
+    for skill_name, info in skills_by_repo.items():
+        repo = info.get("repo", "unknown")
+        repo_counts[repo] = repo_counts.get(repo, 0) + 1
+
     print(f"Global Skills: {len(skills)} installed")
+    for repo_name, count in sorted(repo_counts.items()):
+        print(f"  {repo_name}: {count} skills")
+
     if global_version:
         print(f"Global Version: {global_version}")
     print(f"Skills Path: {workflow_manager.get_global_skills_path()}")
@@ -312,7 +381,7 @@ def cmd_status():
         print(f"Project Rules: {rules_path}")
     else:
         print()
-        print("Project Rules: not configured (run 'cicd init' to create template)")
+        print("Project Rules: not configured (run 'wfm init' to create template)")
 
     return 0
 
@@ -331,14 +400,51 @@ def cmd_version():
     installed = global_version or local_version
     if installed and latest and installed != latest:
         print()
-        print("Update available! Run 'cicd update'")
+        print("Update available! Run 'wfm update'")
 
+    return 0
+
+
+def cmd_repo_add(args):
+    """Handle repo add command."""
+    result = workflow_manager.add_repo(args.name, args.repo)
+    if result["status"] == "success":
+        print(f"[OK] {result['message']}")
+        print(f"Run 'wfm sync' to download skills from this repository.")
+        return 0
+    else:
+        print(f"[ERROR] {result['message']}")
+        return 1
+
+
+def cmd_repo_remove(args):
+    """Handle repo remove command."""
+    result = workflow_manager.remove_repo(args.name)
+    if result["status"] == "success":
+        print(f"[OK] {result['message']}")
+        return 0
+    else:
+        print(f"[ERROR] {result['message']}")
+        return 1
+
+
+def cmd_repo_list():
+    """Handle repo list command."""
+    repos = workflow_manager.get_configured_repos()
+    if not repos:
+        print("No repositories configured.")
+        print("Use 'wfm repo add <name> <owner/repo>' to add one.")
+        return 0
+
+    print("Configured Repositories:")
+    for name, repo in repos.items():
+        print(f"  {name}: {repo}")
     return 0
 
 
 def cmd_monitor(args):
     """Handle monitor command."""
-    from cicd import monitor
+    from wfm import monitor
 
     if args.emit:
         # Emit an event

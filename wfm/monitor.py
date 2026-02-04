@@ -4,7 +4,7 @@ Provides event emission, WebSocket server, and dashboard serving capabilities.
 
 Usage in workflows:
     # Enable monitoring with: CICD_MONITOR=1
-    from cicd.monitor import emit
+    from wfm.monitor import emit
     emit("architect", "start", workflow="design-feature")
     emit("architect", "end")
 """
@@ -168,7 +168,7 @@ def emit(
     """Convenience function to emit an event.
 
     Usage:
-        from cicd.monitor import emit
+        from wfm.monitor import emit
         emit("architect", "start", workflow="design-feature")
 
     Enable with: CICD_MONITOR=1 or CICD_MONITOR=true
