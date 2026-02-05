@@ -1,91 +1,115 @@
-name: Create Release on Version Bump
+name: Create Release from Release Branch
 
 on:
   push:
-    branches: [master, main]
-    paths:
-      - 'pyproject.toml'
+    branches:
+      - 'release/v*'
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version_changed: ${{ steps.check.outputs.changed }}
-      new_version: ${{ steps.check.outputs.version }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Check if version changed
-        id: check
-        run: |
-          # Get current version
-          CURRENT=$(grep -E '^version\s*=' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-
-          # Get previous version
-          git checkout HEAD~1 -- pyproject.toml 2>/dev/null || true
-          PREVIOUS=$(grep -E '^version\s*=' pyproject.toml | sed 's/version = "\(.*\)"/\1/' 2>/dev/null || echo "0.0.0")
-          git checkout HEAD -- pyproject.toml
-
-          echo "Previous: $PREVIOUS"
-          echo "Current: $CURRENT"
-
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "version=$CURRENT" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-
   create-release:
-    needs: check-version
-    if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from branch name
+        id: version
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          VERSION="${BRANCH_NAME#release/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+
+      - name: Validate version in pyproject.toml
+        run: |
+          TOML_VERSION=$(grep -E '^version\s*=' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          BRANCH_VERSION="${{ steps.version.outputs.version }}"
+          BRANCH_VERSION_CLEAN="${BRANCH_VERSION#v}"
+
+          if [ "$TOML_VERSION" != "$BRANCH_VERSION_CLEAN" ]; then
+            echo "ERROR: Version mismatch!"
+            echo "  pyproject.toml: $TOML_VERSION"
+            echo "  Branch name: $BRANCH_VERSION_CLEAN"
+            exit 1
+          fi
+          echo "Version validated: $TOML_VERSION"
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create tag
+        if: steps.check_tag.outputs.exists == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ needs.check-version.outputs.new_version }}" -m "Release v${{ needs.check-version.outputs.new_version }}"
-          git push origin "v${{ needs.check-version.outputs.new_version }}"
+          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
 
       - name: Generate release notes
         id: notes
         run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
           # Get previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
 
+          # Get commits
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log ${PREV_TAG}..HEAD --oneline --no-merges)
+            RANGE="${PREV_TAG}..HEAD"
           else
-            COMMITS=$(git log --oneline --no-merges -20)
+            RANGE="HEAD~20..HEAD"
           fi
 
-          # Format release notes
+          # Categorize commits
+          FEATURES=$(git log $RANGE --oneline --no-merges --grep="^feat" 2>/dev/null || true)
+          FIXES=$(git log $RANGE --oneline --no-merges --grep="^fix" 2>/dev/null || true)
+          OTHERS=$(git log $RANGE --oneline --no-merges --grep="^ci\|^chore\|^docs" 2>/dev/null || true)
+
           {
             echo "notes<<EOF"
             echo "## What's Changed"
             echo ""
-            echo "$COMMITS" | while read line; do
-              echo "- $line"
-            done
-            echo ""
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${{ needs.check-version.outputs.new_version }}"
+
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo "$FEATURES" | while read line; do echo "- $line"; done
+              echo ""
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo "$FIXES" | while read line; do echo "- $line"; done
+              echo ""
+            fi
+
+            if [ -n "$OTHERS" ]; then
+              echo "### 🔧 Other Changes"
+              echo "$OTHERS" | while read line; do echo "- $line"; done
+              echo ""
+            fi
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...$VERSION"
+            fi
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.check-version.outputs.new_version }}
-          name: v${{ needs.check-version.outputs.new_version }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
           body: ${{ steps.notes.outputs.notes }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
