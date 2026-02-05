@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_created: ${{ steps.check_tag.outputs.exists == 'false' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +46,7 @@ jobs:
         run: |
           if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag already exists, skipping release"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
@@ -56,21 +60,18 @@ jobs:
           git push origin "${{ steps.version.outputs.version }}"
 
       - name: Generate release notes
+        if: steps.check_tag.outputs.exists == 'false'
         id: notes
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-
-          # Get previous tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
 
-          # Get commits
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..HEAD"
           else
             RANGE="HEAD~20..HEAD"
           fi
 
-          # Categorize commits
           FEATURES=$(git log $RANGE --oneline --no-merges --grep="^feat" 2>/dev/null || true)
           FIXES=$(git log $RANGE --oneline --no-merges --grep="^fix" 2>/dev/null || true)
           OTHERS=$(git log $RANGE --oneline --no-merges --grep="^ci\|^chore\|^docs" 2>/dev/null || true)
@@ -79,25 +80,21 @@ jobs:
             echo "notes<<EOF"
             echo "## What's Changed"
             echo ""
-
             if [ -n "$FEATURES" ]; then
               echo "### ✨ Features"
               echo "$FEATURES" | while read line; do echo "- $line"; done
               echo ""
             fi
-
             if [ -n "$FIXES" ]; then
               echo "### 🐛 Bug Fixes"
               echo "$FIXES" | while read line; do echo "- $line"; done
               echo ""
             fi
-
             if [ -n "$OTHERS" ]; then
               echo "### 🔧 Other Changes"
               echo "$OTHERS" | while read line; do echo "- $line"; done
               echo ""
             fi
-
             if [ -n "$PREV_TAG" ]; then
               echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...$VERSION"
             fi
@@ -113,3 +110,30 @@ jobs:
           body: ${{ steps.notes.outputs.notes }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+
+  build:
+    needs: create-release
+    if: needs.create-release.outputs.tag_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Build package
+        run: uv build
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: dist/*
