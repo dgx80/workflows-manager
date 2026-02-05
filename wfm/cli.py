@@ -474,26 +474,47 @@ def cmd_self_update():
     print()
     print(f"Updating {current_version} → {latest_version}...")
 
-    # Install from GitHub (not PyPI)
-    github_url = f"git+https://github.com/dgx80/workflows-manager@v{latest_version}"
+    # Download wheel from GitHub releases
+    import tempfile
+    wheel_name = f"workflows_manager-{latest_version}-py3-none-any.whl"
 
-    # Determine install method (uv or pip)
-    if shutil.which("uv"):
-        cmd = ["uv", "tool", "install", "--force", github_url]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", github_url]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        wheel_path = os.path.join(tmpdir, wheel_name)
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode == 0:
-            print(f"[OK] Updated to {latest_version}")
-            return 0
-        else:
-            print(f"[ERROR] Update failed: {result.stderr}")
+        # Download wheel using gh
+        download_cmd = [
+            "gh", "release", "download", f"v{latest_version}",
+            "--repo", "dgx80/workflows-manager",
+            "--pattern", wheel_name,
+            "--dir", tmpdir
+        ]
+
+        try:
+            result = subprocess.run(download_cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0:
+                print(f"[ERROR] Failed to download wheel: {result.stderr}")
+                return 1
+        except Exception as e:
+            print(f"[ERROR] Failed to download wheel: {e}")
             return 1
-    except Exception as e:
-        print(f"[ERROR] Update failed: {e}")
-        return 1
+
+        # Install wheel
+        if shutil.which("uv"):
+            cmd = ["uv", "tool", "install", "--force", wheel_path]
+        else:
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", wheel_path]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                print(f"[OK] Updated to {latest_version}")
+                return 0
+            else:
+                print(f"[ERROR] Update failed: {result.stderr}")
+                return 1
+        except Exception as e:
+            print(f"[ERROR] Update failed: {e}")
+            return 1
 
 
 def cmd_repo_add(args):
