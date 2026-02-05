@@ -474,11 +474,14 @@ def cmd_self_update():
     print()
     print(f"Updating {current_version} → {latest_version}...")
 
+    # Install from GitHub (not PyPI)
+    github_url = f"git+https://github.com/dgx80/workflows-manager@v{latest_version}"
+
     # Determine install method (uv or pip)
     if shutil.which("uv"):
-        cmd = ["uv", "tool", "install", "--upgrade", "workflows-manager"]
+        cmd = ["uv", "tool", "install", "--force", github_url]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "workflows-manager"]
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", github_url]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
