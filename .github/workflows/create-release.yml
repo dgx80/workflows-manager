@@ -12,6 +12,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      version_clean: ${{ steps.version.outputs.version_clean }}
       tag_created: ${{ steps.check_tag.outputs.exists == 'false' }}
 
     steps:
@@ -24,14 +25,15 @@ jobs:
         run: |
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           VERSION="${BRANCH_NAME#release/}"
+          VERSION_CLEAN="${VERSION#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_clean=$VERSION_CLEAN" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
 
       - name: Validate version in pyproject.toml
         run: |
           TOML_VERSION=$(grep -E '^version\s*=' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          BRANCH_VERSION="${{ steps.version.outputs.version }}"
-          BRANCH_VERSION_CLEAN="${BRANCH_VERSION#v}"
+          BRANCH_VERSION_CLEAN="${{ steps.version.outputs.version_clean }}"
 
           if [ "$TOML_VERSION" != "$BRANCH_VERSION_CLEAN" ]; then
             echo "ERROR: Version mismatch!"
@@ -95,6 +97,34 @@ jobs:
               echo "$OTHERS" | while read line; do echo "- $line"; done
               echo ""
             fi
+            echo "## Installation"
+            echo ""
+            echo "### Windows"
+            echo "\`\`\`powershell"
+            echo "# Download and run installer"
+            echo "Invoke-WebRequest -Uri https://github.com/${{ github.repository }}/releases/download/$VERSION/wfm-windows-installer.exe -OutFile wfm-setup.exe"
+            echo "./wfm-setup.exe"
+            echo "\`\`\`"
+            echo ""
+            echo "### Linux"
+            echo "\`\`\`bash"
+            echo "curl -L https://github.com/${{ github.repository }}/releases/download/$VERSION/wfm-linux.tar.gz | tar xz"
+            echo "sudo mv wfm /usr/local/bin/"
+            echo "\`\`\`"
+            echo ""
+            echo "### macOS"
+            echo "\`\`\`bash"
+            echo "curl -L https://github.com/${{ github.repository }}/releases/download/$VERSION/wfm-macos.tar.gz | tar xz"
+            echo "sudo mv wfm /usr/local/bin/"
+            echo "\`\`\`"
+            echo ""
+            echo "### Via pip/uv"
+            echo "\`\`\`bash"
+            echo "pip install workflows-manager"
+            echo "# or"
+            echo "uv tool install workflows-manager"
+            echo "\`\`\`"
+            echo ""
             if [ -n "$PREV_TAG" ]; then
               echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...$VERSION"
             fi
@@ -111,7 +141,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
 
-  build:
+  # Build Python package (wheel + sdist)
+  build-python:
     needs: create-release
     if: needs.create-release.outputs.tag_created == 'true'
     runs-on: ubuntu-latest
@@ -123,11 +154,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.11
 
       - name: Build package
         run: uv build
@@ -137,3 +163,152 @@ jobs:
         with:
           tag_name: ${{ needs.create-release.outputs.version }}
           files: dist/*
+
+  # Build standalone executables for each platform
+  build-binaries:
+    needs: create-release
+    if: needs.create-release.outputs.tag_created == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            ext: .exe
+          - os: ubuntu-latest
+            name: linux
+            ext: ""
+          - os: macos-latest
+            name: macos
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller pyyaml
+
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --name wfm wfm/cli.py
+
+      - name: Create archive (Unix)
+        if: matrix.name != 'windows'
+        run: |
+          cd dist
+          tar -czvf wfm-${{ matrix.name }}.tar.gz wfm
+
+      - name: Create archive (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/wfm.exe -DestinationPath dist/wfm-windows.zip
+
+      - name: Upload binary to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: |
+            dist/wfm-${{ matrix.name }}.tar.gz
+            dist/wfm-windows.zip
+
+  # Build Windows installer with NSIS
+  build-windows-installer:
+    needs: [create-release, build-binaries]
+    if: needs.create-release.outputs.tag_created == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyinstaller pyyaml
+
+      - name: Build executable
+        run: pyinstaller --onefile --name wfm wfm/cli.py
+
+      - name: Create NSIS installer script
+        shell: pwsh
+        run: |
+          $version = "${{ needs.create-release.outputs.version_clean }}"
+          @"
+          !include "MUI2.nsh"
+
+          Name "Workflow Manager"
+          OutFile "wfm-windows-installer.exe"
+          InstallDir "`$PROGRAMFILES\wfm"
+          RequestExecutionLevel admin
+
+          !insertmacro MUI_PAGE_WELCOME
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_PAGE_FINISH
+
+          !insertmacro MUI_LANGUAGE "English"
+
+          Section "Install"
+            SetOutPath "`$INSTDIR"
+            File "dist\wfm.exe"
+
+            ; Add to PATH
+            EnVar::AddValue "PATH" "`$INSTDIR"
+
+            ; Create uninstaller
+            WriteUninstaller "`$INSTDIR\uninstall.exe"
+
+            ; Start menu
+            CreateDirectory "`$SMPROGRAMS\Workflow Manager"
+            CreateShortcut "`$SMPROGRAMS\Workflow Manager\Uninstall.lnk" "`$INSTDIR\uninstall.exe"
+          SectionEnd
+
+          Section "Uninstall"
+            Delete "`$INSTDIR\wfm.exe"
+            Delete "`$INSTDIR\uninstall.exe"
+            RMDir "`$INSTDIR"
+
+            ; Remove from PATH
+            EnVar::DeleteValue "PATH" "`$INSTDIR"
+
+            ; Remove start menu
+            Delete "`$SMPROGRAMS\Workflow Manager\Uninstall.lnk"
+            RMDir "`$SMPROGRAMS\Workflow Manager"
+          SectionEnd
+          "@ | Out-File -FilePath installer.nsi -Encoding ASCII
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
+      - name: Install EnVar plugin
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://nsis.sourceforge.io/mediawiki/images/7/7f/EnVar_plugin.zip" -OutFile envar.zip
+          Expand-Archive -Path envar.zip -DestinationPath envar
+          Copy-Item -Path "envar\Plugins\x86-unicode\EnVar.dll" -Destination "C:\Program Files (x86)\NSIS\Plugins\x86-unicode\" -Force
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+
+      - name: Upload installer to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.version }}
+          files: wfm-windows-installer.exe

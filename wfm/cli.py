@@ -394,19 +394,44 @@ def cmd_status():
 
 def cmd_version():
     """Handle version command."""
-    # v2.0: Check both global and local versions
+    import subprocess
+    import json
+
+    # WFM CLI version
+    print(f"wfm CLI:       {__version__}")
+
+    # Get latest wfm release from GitHub
+    try:
+        result = subprocess.run(
+            ["gh", "release", "view", "--repo", "dgx80/workflows-manager", "--json", "tagName"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            latest_wfm = data.get("tagName", "").lstrip("v")
+            print(f"wfm Latest:    {latest_wfm}")
+            if __version__ != latest_wfm:
+                print()
+                print("Update available! Run 'wfm self-update'")
+        else:
+            print(f"wfm Latest:    unknown")
+    except Exception:
+        print(f"wfm Latest:    unknown")
+
+    print()
+
+    # Workflow skills version
     global_version = workflow_manager.get_global_installed_version()
-    local_version = workflow_manager.get_installed_version()
-    latest = workflow_manager.get_latest_version()
+    latest_skills = workflow_manager.get_latest_version()
 
-    print(f"Global Skills: {global_version or 'not installed'}")
-    print(f"Project:       {local_version or 'not initialized'}")
-    print(f"Latest:        {latest or 'unknown'}")
+    print(f"Skills:        {global_version or 'not installed'}")
+    print(f"Skills Latest: {latest_skills or 'unknown'}")
 
-    installed = global_version or local_version
-    if installed and latest and installed != latest:
+    if global_version and latest_skills and global_version != latest_skills:
         print()
-        print("Update available! Run 'wfm update'")
+        print("Skills update available! Run 'wfm update'")
 
     return 0
 
