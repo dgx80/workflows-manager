@@ -80,6 +80,9 @@ def main():
     # repo list
     repo_subparsers.add_parser("list", help="List configured repositories")
 
+    # self-update command
+    subparsers.add_parser("self-update", help="Update wfm CLI to the latest release")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -112,6 +115,8 @@ def main():
         else:
             print("Usage: wfm repo <add|remove|list>")
             return 1
+    elif args.command == "self-update":
+        return cmd_self_update()
     else:
         print_help()
         return 0
@@ -129,6 +134,7 @@ def print_help():
     print("  wfm list        List all workflows, agents, and skills")
     print("  wfm status      Show extended workflows and skills info")
     print("  wfm version     Show installed and latest version")
+    print("  wfm self-update Update wfm CLI to latest release")
     print("  wfm repo        Manage workflow repositories")
     print("  wfm monitor     Real-time workflow visualization")
     print()
@@ -403,6 +409,63 @@ def cmd_version():
         print("Update available! Run 'wfm update'")
 
     return 0
+
+
+def cmd_self_update():
+    """Handle self-update command - update wfm CLI to latest release."""
+    import shutil
+    import subprocess
+
+    print("Checking for updates...")
+
+    # Get latest version from GitHub
+    try:
+        result = subprocess.run(
+            ["gh", "release", "view", "--repo", "dgx80/workflows-manager", "--json", "tagName"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode != 0:
+            print("[ERROR] Failed to check latest version")
+            return 1
+
+        import json
+        data = json.loads(result.stdout)
+        latest_version = data.get("tagName", "").lstrip("v")
+    except Exception as e:
+        print(f"[ERROR] Failed to check latest version: {e}")
+        return 1
+
+    # Compare with current version
+    current_version = __version__
+    print(f"Current version: {current_version}")
+    print(f"Latest version:  {latest_version}")
+
+    if current_version == latest_version:
+        print("[OK] Already at the latest version!")
+        return 0
+
+    print()
+    print(f"Updating {current_version} → {latest_version}...")
+
+    # Determine install method (uv or pip)
+    if shutil.which("uv"):
+        cmd = ["uv", "tool", "install", "--upgrade", "workflows-manager"]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "workflows-manager"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            print(f"[OK] Updated to {latest_version}")
+            return 0
+        else:
+            print(f"[ERROR] Update failed: {result.stderr}")
+            return 1
+    except Exception as e:
+        print(f"[ERROR] Update failed: {e}")
+        return 1
 
 
 def cmd_repo_add(args):
