@@ -1,13 +1,14 @@
-"""CLI for cicd-workflow.
+"""CLI for wfm - Workflow Manager for Claude Code.
 
 Commands:
-    cicd init       Initialize workflows and global skills
-    cicd update     Update global skills and core workflows
-    cicd sync       Force re-download global skills
-    cicd list       List all workflows, agents, and skills
-    cicd status     Show extended workflows and skills info
-    cicd version    Show installed and latest version
-    cicd monitor    Real-time workflow visualization dashboard
+    wfm repo add    Add a local repository
+    wfm repo remove Remove a repository
+    wfm repo list   List configured repositories
+    wfm sync        Recreate symlinks for all repos
+    wfm list        List all workflows and skills
+    wfm status      Show status and configuration
+    wfm version     Show installed version
+    wfm self-update Update wfm CLI
 """
 
 import argparse
@@ -18,60 +19,35 @@ from wfm import __version__, workflow_manager
 
 
 def main():
-    """Main entry point for cicd CLI."""
+    """Main entry point for wfm CLI."""
     parser = argparse.ArgumentParser(
-        prog="cicd",
-        description="CI/CD workflows and agents for Claude Code projects"
+        prog="wfm",
+        description="Workflow Manager for Claude Code - manage skills and workflows via local repos"
     )
-    parser.add_argument("-V", "--version", action="version", version=f"cicd-workflow {__version__}")
+    parser.add_argument("-V", "--version", action="version", version=f"wfm {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # init command
-    init_parser = subparsers.add_parser("init", help="Initialize workflows in project")
-    init_parser.add_argument("--force", "-f", action="store_true", help="Reinitialize even if exists")
-    init_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
-
-    # update command
-    update_parser = subparsers.add_parser("update", help="Update global skills and core workflows")
-    update_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
-
-    # sync command (v2.0)
-    sync_parser = subparsers.add_parser("sync", help="Force re-download global skills")
-    sync_parser.add_argument("--version", "-v", dest="release_version", help="Specific version (e.g., v0.1.0)")
-    sync_parser.add_argument("--branch", "-b", help="Download from branch instead of release (e.g., feature/6-global-skills-architecture)")
-
-    # migrate command (v2.0)
-    migrate_parser = subparsers.add_parser("migrate", help="Migrate from old commands to global skills")
-    migrate_parser.add_argument("--remove", "-r", action="store_true", help="Remove legacy command files after migration")
+    # sync command (recreate symlinks)
+    subparsers.add_parser("sync", help="Recreate all symlinks from configured repos")
 
     # list command
-    subparsers.add_parser("list", help="List all workflows, agents, and skills")
+    subparsers.add_parser("list", help="List all workflows and skills")
 
     # status command
-    subparsers.add_parser("status", help="Show extended workflows")
+    subparsers.add_parser("status", help="Show status and configuration")
 
-    # version command (show installed vs latest)
-    subparsers.add_parser("version", help="Show installed and latest version")
-
-    # monitor command
-    monitor_parser = subparsers.add_parser("monitor", help="Real-time workflow visualization")
-    monitor_parser.add_argument("--serve", "-s", action="store_true", help="Start the monitor server")
-    monitor_parser.add_argument("--open", "-o", action="store_true", help="Open dashboard in browser")
-    monitor_parser.add_argument("--emit", "-e", action="store_true", help="Emit an event")
-    monitor_parser.add_argument("--agent", "-a", help="Agent name (for --emit)")
-    monitor_parser.add_argument("--action", help="Action: start, end, error (for --emit)")
-    monitor_parser.add_argument("--workflow", "-w", help="Workflow name (for --emit)")
-    monitor_parser.add_argument("--port", "-p", type=int, default=8000, help="Server port (default: 8000)")
+    # version command
+    subparsers.add_parser("version", help="Show wfm version")
 
     # repo command (multi-repo support)
     repo_parser = subparsers.add_parser("repo", help="Manage workflow repositories")
     repo_subparsers = repo_parser.add_subparsers(dest="repo_command", help="Repository commands")
 
     # repo add
-    repo_add_parser = repo_subparsers.add_parser("add", help="Add a repository")
+    repo_add_parser = repo_subparsers.add_parser("add", help="Add a local repository")
     repo_add_parser.add_argument("name", help="Short name for the repo (used as skill prefix)")
-    repo_add_parser.add_argument("repo", help="GitHub repo path (e.g., owner/repo)")
+    repo_add_parser.add_argument("path", help="Local path to the repository")
 
     # repo remove
     repo_remove_parser = repo_subparsers.add_parser("remove", help="Remove a repository")
@@ -89,22 +65,14 @@ def main():
         print_help()
         return 0
 
-    if args.command == "init":
-        return cmd_init(args)
-    elif args.command == "update":
-        return cmd_update(args)
-    elif args.command == "sync":
+    if args.command == "sync":
         return cmd_sync(args)
-    elif args.command == "migrate":
-        return cmd_migrate(args)
     elif args.command == "list":
         return cmd_list()
     elif args.command == "status":
         return cmd_status()
     elif args.command == "version":
         return cmd_version()
-    elif args.command == "monitor":
-        return cmd_monitor(args)
     elif args.command == "repo":
         if args.repo_command == "add":
             return cmd_repo_add(args)
@@ -126,268 +94,253 @@ def print_help():
     """Print help message."""
     print("wfm - Workflow Manager for Claude Code")
     print()
+    print("Manage skills and workflows via local repositories with symlinks.")
+    print("You manage git yourself, wfm just manages the symlinks.")
+    print()
     print("Commands:")
-    print("  wfm init        Initialize global skills and project workflows")
-    print("  wfm update      Update global skills and core workflows")
-    print("  wfm sync        Sync all configured repositories")
-    print("  wfm migrate     Migrate from old commands to global skills")
-    print("  wfm list        List all workflows, agents, and skills")
-    print("  wfm status      Show extended workflows and skills info")
-    print("  wfm version     Show installed and latest version")
-    print("  wfm self-update Update wfm CLI to latest release")
-    print("  wfm repo        Manage workflow repositories")
-    print("  wfm monitor     Real-time workflow visualization")
+    print("  wfm repo add <name> <path>  Add a local repository")
+    print("  wfm repo remove <name>      Remove repository and symlinks")
+    print("  wfm repo list               List configured repositories")
+    print("  wfm sync                    Recreate all symlinks")
+    print("  wfm list                    List all skills and workflows")
+    print("  wfm status                  Show configuration and status")
+    print("  wfm version                 Show wfm version")
+    print("  wfm self-update             Update wfm CLI")
     print()
-    print("Repository commands:")
-    print("  wfm repo add <name> <owner/repo>  Add a repository")
-    print("  wfm repo remove <name>            Remove a repository")
-    print("  wfm repo list                     List configured repositories")
-    print()
-    print("Options (init/update/sync):")
-    print("  --force, -f     Reinitialize even if exists (init only)")
-    print("  --version, -v   Install specific version (e.g., -v v0.1.0)")
-    print()
-    print("Migration options:")
-    print("  --remove, -r    Remove legacy command files after migration")
-    print()
-    print("Monitor options:")
-    print("  --serve, -s     Start the monitor server")
-    print("  --open, -o      Open dashboard in browser")
-    print("  --emit, -e      Emit an event to the server")
-    print("  --agent, -a     Agent name (architect, coder, etc.)")
-    print("  --action        Action type (start, end, error)")
-    print("  --workflow, -w  Workflow name")
+    print("Quick start:")
+    print("  wfm repo add cicd C:/Users/me/dev/cicd-workflow")
+    print("  wfm sync")
     print()
     print("Architecture:")
-    print("  ~/.claude/wfm.json   Repository configuration")
-    print("  ~/.claude/skills/    Global skills ({repo}-*)")
-    print("  ~/.claude/workflows/ Global workflows")
-    print("  .claude/rules/       Project context (auto-loaded)")
-    print("  .cicd/extends/       Project extensions (priority)")
-    print()
-    print(f"Default source: {workflow_manager.CICD_WORKFLOW_URL}")
-
-
-def cmd_init(args):
-    """Handle init command."""
-    result = workflow_manager.init(
-        force=args.force,
-        version=getattr(args, 'release_version', None)
-    )
-    print_result(result)
-    return 0 if result["status"] in ("success", "already_initialized") else 1
-
-
-def cmd_update(args):
-    """Handle update command."""
-    result = workflow_manager.update(
-        version=getattr(args, 'release_version', None)
-    )
-    print_result(result)
-    return 0 if result["status"] in ("success", "up_to_date") else 1
+    print("  ~/.claude/wfm.json     Config (repos, ignored skills)")
+    print("  ~/.claude/skills/      Symlinks to repo skills")
+    print("  ~/.claude/workflows/   Symlinks to repo workflows")
 
 
 def cmd_sync(args):
-    """Handle sync command - sync all configured repositories."""
-    branch = getattr(args, 'branch', None)
-    version = getattr(args, 'release_version', None)
+    """Handle sync command - recreate all symlinks from configured repos."""
+    result = workflow_manager.sync_all()
 
-    if branch:
-        print(f"Syncing from branch: {branch}")
+    if result["status"] == "error":
+        print(f"[ERROR] {result.get('message', 'Unknown error')}")
+        return 1
 
-    # Use sync_all for multi-repo support
-    result = workflow_manager.sync_all(version=version, branch=branch)
-
+    # Print sync results
     if result["status"] == "success":
         print(f"[OK] {result['message']}")
-        for repo_result in result.get("results", []):
-            skills = repo_result.get("skills_synced", [])
-            if skills:
-                print(f"  {repo_result['repo_name']}: {', '.join(skills)}")
-        print(f"\nLocation: {workflow_manager.get_global_skills_path()}")
-        return 0
     elif result["status"] == "partial":
         print(f"[WARN] {result['message']}")
         for error in result.get("errors", []):
             print(f"  - {error}")
-        return 1
-    else:
-        print(f"[ERROR] {result.get('message', 'Unknown error')}")
-        return 1
 
+    # Show synced repos
+    for repo_result in result.get("results", []):
+        if repo_result["status"] == "success":
+            skills = repo_result.get("skills_synced", [])
+            workflows = repo_result.get("workflows_synced", [])
+            print(f"\n  {repo_result['repo_name']}:")
+            if skills:
+                print(f"    Skills: {', '.join(skills)}")
+            if workflows:
+                print(f"    Workflows: {', '.join(workflows)}")
+            print(f"    Path: {repo_result.get('repo_path', 'N/A')}")
 
-def cmd_migrate(args):
-    """Handle migrate command - migrate from old commands to global skills."""
-    # First check if migration is needed
-    detection = workflow_manager.detect_migration_needed()
+    # Handle orphan skills
+    orphan_skills = result.get("orphan_skills", [])
+    if orphan_skills:
+        print(f"\n[INFO] Detected {len(orphan_skills)} orphan skill(s) (not linked to any repo):")
+        repos = list(workflow_manager.get_configured_repos().keys())
 
-    if not detection["needs_migration"]:
-        if detection["has_global_skills"]:
-            print("[INFO] Global skills already installed. Use 'cicd sync' to update.")
-        else:
-            print("[INFO] No legacy commands found. Nothing to migrate.")
-        return 0
+        for skill in orphan_skills:
+            print(f"\n  Skill: {skill}")
+            print(f"  Where to place this skill?")
+            for i, repo in enumerate(repos):
+                print(f"    {i + 1}. {repo}")
+            print(f"    0. Ignore (don't ask again)")
+            print(f"    Enter. Skip for now")
 
-    print("Migration detected:")
-    print(f"  Legacy commands: {detection['has_legacy_commands']}")
-    print(f"  Global skills: {detection['has_global_skills']}")
-    print()
+            try:
+                choice = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Skipped.")
+                continue
 
-    # Perform migration
-    result = workflow_manager.migrate(remove_legacy=args.remove)
-    print_result(result)
+            if choice == "0":
+                workflow_manager.ignore_skill(skill)
+                print(f"  [OK] '{skill}' added to ignored list")
+            elif choice.isdigit() and 0 < int(choice) <= len(repos):
+                repo_name = repos[int(choice) - 1]
+                adopt_result = workflow_manager.adopt_skill(skill, repo_name)
+                if adopt_result["status"] == "success":
+                    print(f"  [OK] {adopt_result['message']}")
+                else:
+                    print(f"  [ERROR] {adopt_result['message']}")
+            else:
+                print(f"  Skipped.")
 
-    if result["status"] == "success":
-        skills = result.get("migrated_skills", [])
-        if skills:
-            print(f"\nMigrated skills: {', '.join(skills)}")
-            print(f"Location: {result.get('global_skills_path')}")
-            if result.get("rules_created"):
-                print(f"Rules template: {result.get('rules_created')}")
-            if result.get("removed_files"):
-                print(f"Removed legacy files: {', '.join(result['removed_files'])}")
+    # Handle orphan workflows
+    orphan_workflows = result.get("orphan_workflows", [])
+    if orphan_workflows:
+        print(f"\n[INFO] Detected {len(orphan_workflows)} orphan workflow(s):")
+        repos = list(workflow_manager.get_configured_repos().keys())
 
-    return 0 if result["status"] in ("success", "not_needed", "already_migrated") else 1
+        for wf in orphan_workflows:
+            print(f"\n  Workflow: {wf}")
+            print(f"  Where to place this workflow?")
+            for i, repo in enumerate(repos):
+                print(f"    {i + 1}. {repo}")
+            print(f"    0. Ignore (don't ask again)")
+            print(f"    Enter. Skip for now")
+
+            try:
+                choice = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  Skipped.")
+                continue
+
+            if choice == "0":
+                workflow_manager.ignore_workflow(wf)
+                print(f"  [OK] '{wf}' added to ignored list")
+            elif choice.isdigit() and 0 < int(choice) <= len(repos):
+                repo_name = repos[int(choice) - 1]
+                adopt_result = workflow_manager.adopt_workflow(wf, repo_name)
+                if adopt_result["status"] == "success":
+                    print(f"  [OK] {adopt_result['message']}")
+                else:
+                    print(f"  [ERROR] {adopt_result['message']}")
+            else:
+                print(f"  Skipped.")
+
+    print(f"\nSkills: {workflow_manager.get_global_skills_path()}")
+    print(f"Workflows: {workflow_manager.get_global_workflows_path()}")
+
+    return 0 if result["status"] == "success" else 1
 
 
 def cmd_list():
-    """Handle list command."""
-    result = workflow_manager.list_workflows()
+    """Handle list command - list all skills and workflows."""
+    from wfm import platform as plat
 
-    # Show version info
-    global_version = workflow_manager.get_global_installed_version()
-    local_version = result.get("version")
+    repos = workflow_manager.get_configured_repos()
 
-    if global_version:
-        print(f"Global version: {global_version}")
-    if local_version and local_version != global_version:
-        print(f"Project version: {local_version}")
-    if not global_version and not local_version:
-        print("[WARN] Not initialized. Run 'wfm init'")
+    if not repos:
+        print("No repositories configured.")
+        print("Use 'wfm repo add <name> <path>' to add one.")
+        return 0
+
+    print("Configured Repositories:")
+    for name, repo in repos.items():
+        repo_path = workflow_manager.get_repo_local_path(name, repo)
+        status = "ok" if repo_path.exists() else "path not found"
+        print(f"  {name}: {repo} ({status})")
     print()
 
-    # Show configured repos
-    repos = workflow_manager.get_configured_repos()
-    if repos:
-        print("Configured Repositories:")
-        for name, repo in repos.items():
-            print(f"  {name}: {repo}")
-        print()
+    # List skills
+    skills_path = workflow_manager.get_global_skills_path()
+    if skills_path.exists():
+        skills = []
+        for item in sorted(skills_path.iterdir()):
+            if item.is_dir() and (item / "SKILL.md").exists():
+                is_link = plat.is_link(item)
+                link_marker = "" if is_link else " (orphan)"
+                skills.append(f"  /{item.name}{link_marker}")
 
-    # List global skills with repo source
-    skills = workflow_manager.list_global_skills_with_repo()
-    if skills:
-        print("Global Skills (~/.claude/skills/):")
-        for skill_name in sorted(skills.keys()):
-            info = skills[skill_name]
-            repo = info.get("repo", "unknown")
-            print(f"  [{repo:8}] /{skill_name}")
+        if skills:
+            print(f"Skills ({len(skills)}):")
+            for s in skills:
+                print(s)
+        else:
+            print("No skills installed.")
     else:
-        print("No global skills installed.")
+        print("No skills installed.")
     print()
 
     # List workflows
-    workflows = result.get("workflows", {})
-    if workflows:
-        print("Workflows (.cicd/core/):")
-        for name, info in sorted(workflows.items()):
-            source = info["source"]
-            marker = " (override)" if info.get("overridden") else ""
-            print(f"  [{source:7}] {name}{marker}")
-    else:
-        print("No workflows found.")
+    workflows_path = workflow_manager.get_global_workflows_path()
+    if workflows_path.exists():
+        workflows = []
+        for item in sorted(workflows_path.iterdir()):
+            if item.is_dir() and (item / "workflow.md").exists():
+                is_link = plat.is_link(item)
+                link_marker = "" if is_link else " (orphan)"
+                workflows.append(f"  {item.name}{link_marker}")
 
-    print()
-
-    # List agents
-    agents = result.get("agents", {})
-    if agents:
-        print("Agents:")
-        for name, info in sorted(agents.items()):
-            source = info["source"]
-            marker = " (override)" if info.get("overridden") else ""
-            print(f"  [{source:7}] {name}{marker}")
+        if workflows:
+            print(f"Workflows ({len(workflows)}):")
+            for w in workflows:
+                print(w)
+        else:
+            print("No workflows installed.")
     else:
-        print("No agents found.")
+        print("No workflows installed.")
 
     return 0
 
 
 def cmd_status():
-    """Handle status command."""
-    result = workflow_manager.status()
-
-    # Show version info (v2.0)
-    global_version = workflow_manager.get_global_installed_version()
-    local_version = result.get("version")
-
-    if not global_version and not result.get("initialized"):
-        print("[WARN] Not initialized. Run 'wfm init'")
-        return 1
+    """Handle status command - show configuration and paths."""
+    from wfm import platform as plat
 
     print("=== WFM Status ===")
     print()
 
-    # Show configured repos
+    # Paths
+    print("Paths:")
+    print(f"  Config:    {workflow_manager.get_wfm_config_path()}")
+    print(f"  Skills:    {workflow_manager.get_global_skills_path()}")
+    print(f"  Workflows: {workflow_manager.get_global_workflows_path()}")
+    print()
+
+    # Repos
     repos = workflow_manager.get_configured_repos()
-    print(f"Configured Repositories: {len(repos)}")
-    for name, repo in repos.items():
-        print(f"  {name}: {repo}")
+    if repos:
+        print(f"Repositories ({len(repos)}):")
+        for name, repo in repos.items():
+            repo_path = workflow_manager.get_repo_local_path(name, repo)
+            if repo_path.exists():
+                status = "ok"
+            else:
+                status = "path not found"
+            print(f"  {name}: {repo} [{status}]")
+    else:
+        print("No repositories configured.")
     print()
 
-    # Global skills info by repo
-    skills_by_repo = workflow_manager.list_global_skills_with_repo()
-    skills = workflow_manager.list_global_skills()
+    # Count skills and workflows
+    skills_path = workflow_manager.get_global_skills_path()
+    workflows_path = workflow_manager.get_global_workflows_path()
 
-    # Count skills per repo
-    repo_counts = {}
-    for skill_name, info in skills_by_repo.items():
-        repo = info.get("repo", "unknown")
-        repo_counts[repo] = repo_counts.get(repo, 0) + 1
+    skill_count = 0
+    orphan_skills = 0
+    if skills_path.exists():
+        for item in skills_path.iterdir():
+            if item.is_dir() and (item / "SKILL.md").exists():
+                skill_count += 1
+                if not plat.is_link(item):
+                    orphan_skills += 1
 
-    print(f"Global Skills: {len(skills)} installed")
-    for repo_name, count in sorted(repo_counts.items()):
-        print(f"  {repo_name}: {count} skills")
+    workflow_count = 0
+    orphan_workflows = 0
+    if workflows_path.exists():
+        for item in workflows_path.iterdir():
+            if item.is_dir() and (item / "workflow.md").exists():
+                workflow_count += 1
+                if not plat.is_link(item):
+                    orphan_workflows += 1
 
-    if global_version:
-        print(f"Global Version: {global_version}")
-    print(f"Skills Path: {workflow_manager.get_global_skills_path()}")
-    print()
+    print(f"Skills: {skill_count} total, {orphan_skills} orphans")
+    print(f"Workflows: {workflow_count} total, {orphan_workflows} orphans")
 
-    # Project info
-    if result.get("initialized"):
-        print(f"Project Version: {local_version or 'unknown'}")
-
-        overridden_wf = result.get("overridden_workflows", {})
-        overridden_ag = result.get("overridden_agents", {})
-        total_wf = result.get("total_workflows", 0)
-        total_ag = result.get("total_agents", 0)
-
-        print(f"Workflows: {len(overridden_wf)} extended / {total_wf} total")
-        print(f"Agents:    {len(overridden_ag)} extended / {total_ag} total")
-
-        if overridden_wf:
-            print()
-            print("Extended workflows:")
-            for name in sorted(overridden_wf.keys()):
-                print(f"  - {name}")
-
-        if overridden_ag:
-            print()
-            print("Extended agents:")
-            for name in sorted(overridden_ag.keys()):
-                print(f"  - {name}")
-    else:
-        print("Project: not initialized (global skills only)")
-
-    # Check for project rules
-    rules_path = workflow_manager.get_project_cicd_path().parent / ".claude" / "rules" / "cicd-context.md"
-    if rules_path.exists():
+    # Show ignored items
+    ignored_skills = workflow_manager.get_ignored_skills()
+    ignored_workflows = workflow_manager.get_ignored_workflows()
+    if ignored_skills or ignored_workflows:
         print()
-        print(f"Project Rules: {rules_path}")
-    else:
-        print()
-        print("Project Rules: not configured (run 'wfm init' to create template)")
+        print("Ignored:")
+        if ignored_skills:
+            print(f"  Skills: {', '.join(ignored_skills)}")
+        if ignored_workflows:
+            print(f"  Workflows: {', '.join(ignored_workflows)}")
 
     return 0
 
@@ -397,8 +350,7 @@ def cmd_version():
     import subprocess
     import json
 
-    # WFM CLI version
-    print(f"wfm CLI:       {__version__}")
+    print(f"wfm: {__version__}")
 
     # Get latest wfm release from GitHub
     try:
@@ -411,27 +363,11 @@ def cmd_version():
         if result.returncode == 0:
             data = json.loads(result.stdout)
             latest_wfm = data.get("tagName", "").lstrip("v")
-            print(f"wfm Latest:    {latest_wfm}")
             if __version__ != latest_wfm:
-                print()
-                print("Update available! Run 'wfm self-update'")
-        else:
-            print(f"wfm Latest:    unknown")
+                print(f"Update available: {latest_wfm}")
+                print("Run 'wfm self-update' to update.")
     except Exception:
-        print(f"wfm Latest:    unknown")
-
-    print()
-
-    # Workflow skills version
-    global_version = workflow_manager.get_global_installed_version()
-    latest_skills = workflow_manager.get_latest_version()
-
-    print(f"Skills:        {global_version or 'not installed'}")
-    print(f"Skills Latest: {latest_skills or 'unknown'}")
-
-    if global_version and latest_skills and global_version != latest_skills:
-        print()
-        print("Skills update available! Run 'wfm update'")
+        pass
 
     return 0
 
@@ -472,7 +408,7 @@ def cmd_self_update():
         return 0
 
     print()
-    print(f"Updating {current_version} → {latest_version}...")
+    print(f"Updating {current_version} -> {latest_version}...")
 
     # Download wheel from GitHub releases
     import tempfile
@@ -518,22 +454,50 @@ def cmd_self_update():
 
 
 def cmd_repo_add(args):
-    """Handle repo add command."""
-    result = workflow_manager.add_repo(args.name, args.repo)
-    if result["status"] == "success":
-        print(f"[OK] {result['message']}")
-        print(f"Run 'wfm sync' to download skills from this repository.")
+    """Handle repo add command - adds a local repo path to config and creates symlinks."""
+    from pathlib import Path
+
+    # Resolve the path
+    repo_path = Path(args.path).expanduser().resolve()
+    if not repo_path.exists():
+        print(f"[ERROR] Path does not exist: {repo_path}")
+        return 1
+
+    # Add to config (store as forward-slash path for portability)
+    result = workflow_manager.add_repo(args.name, str(repo_path).replace("\\", "/"))
+    if result["status"] != "success":
+        print(f"[ERROR] {result['message']}")
+        return 1
+
+    print(f"[OK] {result['message']}")
+
+    # Create symlinks
+    sync_result = workflow_manager.sync_repo(args.name, str(repo_path).replace("\\", "/"))
+
+    if sync_result["status"] == "success":
+        skills = sync_result.get("skills_synced", [])
+        workflows = sync_result.get("workflows_synced", [])
+        if skills:
+            print(f"  Skills: {', '.join(skills)}")
+        if workflows:
+            print(f"  Workflows: {', '.join(workflows)}")
         return 0
     else:
-        print(f"[ERROR] {result['message']}")
+        print(f"[ERROR] {sync_result.get('message', 'Sync failed')}")
         return 1
 
 
 def cmd_repo_remove(args):
-    """Handle repo remove command."""
+    """Handle repo remove command - removes repo config and symlinks."""
     result = workflow_manager.remove_repo(args.name)
     if result["status"] == "success":
         print(f"[OK] {result['message']}")
+        removed_skills = result.get("removed_skills", [])
+        removed_workflows = result.get("removed_workflows", [])
+        if removed_skills:
+            print(f"  Removed skill links: {', '.join(removed_skills)}")
+        if removed_workflows:
+            print(f"  Removed workflow links: {', '.join(removed_workflows)}")
         return 0
     else:
         print(f"[ERROR] {result['message']}")
@@ -545,124 +509,13 @@ def cmd_repo_list():
     repos = workflow_manager.get_configured_repos()
     if not repos:
         print("No repositories configured.")
-        print("Use 'wfm repo add <name> <owner/repo>' to add one.")
+        print("Use 'wfm repo add <name> <path>' to add one.")
         return 0
 
     print("Configured Repositories:")
     for name, repo in repos.items():
         print(f"  {name}: {repo}")
     return 0
-
-
-def cmd_monitor(args):
-    """Handle monitor command."""
-    from wfm import monitor
-
-    if args.emit:
-        # Emit an event
-        if not args.agent:
-            print("[ERROR] --agent is required for --emit")
-            return 1
-        if not args.action:
-            print("[ERROR] --action is required for --emit")
-            return 1
-
-        # Force enable for CLI emit command
-        os.environ["CICD_MONITOR"] = "1"
-        emitter = monitor.EventEmitter(port=args.port)
-        result = emitter.emit(
-            agent=args.agent,
-            action=args.action,
-            workflow=args.workflow,
-        )
-
-        if result["status"] == "success":
-            print(f"[OK] Event emitted: {args.agent} → {args.action}")
-        elif result["status"] == "offline":
-            print(f"[WARN] {result['message']}")
-        else:
-            print(f"[ERROR] {result.get('message', 'Unknown error')}")
-        return 0
-
-    if args.serve:
-        # Start the FastAPI server with uvicorn
-        import shutil
-        import subprocess
-        import sys
-        from pathlib import Path
-
-        print(f"Starting CICD Monitor server on port {args.port}...")
-
-        if args.open:
-            # Open browser after a short delay
-            import threading
-            import time
-            def open_browser():
-                time.sleep(2.0)
-                monitor.open_dashboard(args.port)
-            threading.Thread(target=open_browser, daemon=True).start()
-
-        # Find backend directory
-        backend_dir = Path(__file__).parent.parent / "backend"
-        if not backend_dir.exists():
-            print("[ERROR] Backend directory not found. Please install from source.")
-            return 1
-
-        # Run uvicorn (prefer uv if available)
-        try:
-            if shutil.which("uv"):
-                subprocess.run(
-                    ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(args.port)],
-                    cwd=str(backend_dir),
-                    check=True,
-                )
-            else:
-                subprocess.run(
-                    [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(args.port)],
-                    cwd=str(backend_dir),
-                    check=True,
-                )
-        except KeyboardInterrupt:
-            print("\nServer stopped.")
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Server failed: {e}")
-            return 1
-        return 0
-
-    if args.open:
-        # Just open the dashboard
-        print(f"Opening dashboard at http://localhost:{args.port}")
-        monitor.open_dashboard(args.port)
-        return 0
-
-    # Default: show help for monitor
-    print("cicd monitor - Real-time workflow visualization")
-    print()
-    print("Usage:")
-    print("  cicd monitor --serve          Start the monitor server")
-    print("  cicd monitor --serve --open   Start server and open dashboard")
-    print("  cicd monitor --open           Open dashboard in browser")
-    print("  cicd monitor --emit ...       Emit an event")
-    print()
-    print("Emit event example:")
-    print("  cicd monitor --emit --agent architect --action start --workflow design-feature")
-    return 0
-
-
-def print_result(result: dict):
-    """Print command result."""
-    status = result.get("status", "unknown")
-
-    if status == "success":
-        print(f"[OK] {result.get('message', 'Success')}")
-    elif status == "up_to_date":
-        print(f"[OK] {result.get('message', 'Up to date')}")
-    elif status == "already_initialized":
-        print(f"[INFO] {result.get('message', 'Already initialized')}")
-    elif status == "not_initialized":
-        print(f"[WARN] {result.get('message', 'Not initialized')}")
-    else:
-        print(f"[ERROR] {result.get('message', 'Unknown error')}")
 
 
 if __name__ == "__main__":

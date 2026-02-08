@@ -3,26 +3,6 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
-name = "cicd-workflow"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-monitor = [
-    { name = "websockets" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "websockets", marker = "extra == 'monitor'", specifier = ">=12.0" },
-]
-provides-extras = ["monitor"]
-
-[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -135,3 +115,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9a/3f/f70e03f40ffc9a30d817eef7da1be72ee4956ba8d7255c399a01b135902a/websockets-16.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:a653aea902e0324b52f1613332ddf50b00c06fdaf7e92624fbf8c77c78fa5767", size = 178735, upload-time = "2026-01-10T09:23:42.259Z" },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598, upload-time = "2026-01-10T09:23:45.395Z" },
 ]
+
+[[package]]
+name = "workflows-manager"
+version = "0.2.5"
+source = { editable = "." }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+monitor = [
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "websockets", marker = "extra == 'monitor'", specifier = ">=12.0" },
+]
+provides-extras = ["monitor"]
