@@ -1,10 +1,9 @@
 """CLI for wfm - Workflow Manager for Claude Code.
 
 Commands:
-    wfm repo add    Add and clone a repository
+    wfm repo add    Add a local repository
     wfm repo remove Remove a repository
     wfm repo list   List configured repositories
-    wfm repo pull   Pull updates for all repositories
     wfm sync        Recreate symlinks for all repos
     wfm list        List all workflows and skills
     wfm status      Show status and configuration
@@ -23,14 +22,14 @@ def main():
     """Main entry point for wfm CLI."""
     parser = argparse.ArgumentParser(
         prog="wfm",
-        description="Workflow Manager for Claude Code - manage skills and workflows via git repos"
+        description="Workflow Manager for Claude Code - manage skills and workflows via local repos"
     )
     parser.add_argument("-V", "--version", action="version", version=f"wfm {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # sync command (recreate symlinks)
-    subparsers.add_parser("sync", help="Sync all repos (clone if missing, recreate symlinks)")
+    subparsers.add_parser("sync", help="Recreate all symlinks from configured repos")
 
     # list command
     subparsers.add_parser("list", help="List all workflows and skills")
@@ -46,9 +45,9 @@ def main():
     repo_subparsers = repo_parser.add_subparsers(dest="repo_command", help="Repository commands")
 
     # repo add
-    repo_add_parser = repo_subparsers.add_parser("add", help="Add and clone a repository")
+    repo_add_parser = repo_subparsers.add_parser("add", help="Add a local repository")
     repo_add_parser.add_argument("name", help="Short name for the repo (used as skill prefix)")
-    repo_add_parser.add_argument("repo", help="GitHub repo path (e.g., owner/repo)")
+    repo_add_parser.add_argument("path", help="Local path to the repository")
 
     # repo remove
     repo_remove_parser = repo_subparsers.add_parser("remove", help="Remove a repository")
@@ -56,9 +55,6 @@ def main():
 
     # repo list
     repo_subparsers.add_parser("list", help="List configured repositories")
-
-    # repo pull
-    repo_subparsers.add_parser("pull", help="Git pull all repositories")
 
     # self-update command
     subparsers.add_parser("self-update", help="Update wfm CLI to the latest release")
@@ -84,10 +80,8 @@ def main():
             return cmd_repo_remove(args)
         elif args.repo_command == "list":
             return cmd_repo_list()
-        elif args.repo_command == "pull":
-            return cmd_repo_pull()
         else:
-            print("Usage: wfm repo <add|remove|list|pull>")
+            print("Usage: wfm repo <add|remove|list>")
             return 1
     elif args.command == "self-update":
         return cmd_self_update()
@@ -100,14 +94,13 @@ def print_help():
     """Print help message."""
     print("wfm - Workflow Manager for Claude Code")
     print()
-    print("Manage skills and workflows via git repositories with symlinks.")
-    print("You manage git (pull, push, commit), wfm manages the symlinks.")
+    print("Manage skills and workflows via local repositories with symlinks.")
+    print("You manage git yourself, wfm just manages the symlinks.")
     print()
     print("Commands:")
-    print("  wfm repo add <name> <repo>  Add and clone a repository")
+    print("  wfm repo add <name> <path>  Add a local repository")
     print("  wfm repo remove <name>      Remove repository and symlinks")
     print("  wfm repo list               List configured repositories")
-    print("  wfm repo pull               Git pull all repositories")
     print("  wfm sync                    Recreate all symlinks")
     print("  wfm list                    List all skills and workflows")
     print("  wfm status                  Show configuration and status")
@@ -115,19 +108,17 @@ def print_help():
     print("  wfm self-update             Update wfm CLI")
     print()
     print("Quick start:")
-    print("  wfm repo add cicd dgx80/cicd-workflow")
+    print("  wfm repo add cicd C:/Users/me/dev/cicd-workflow")
     print("  wfm sync")
     print()
     print("Architecture:")
     print("  ~/.claude/wfm.json     Config (repos, ignored skills)")
-    print("  ~/.claude/repos/       Cloned git repositories")
-    print("  ~/.claude/skills/      Symlinks to repos/*/skills/*")
-    print("  ~/.claude/workflows/   Symlinks to repos/*/workflows/*")
+    print("  ~/.claude/skills/      Symlinks to repo skills")
+    print("  ~/.claude/workflows/   Symlinks to repo workflows")
 
 
 def cmd_sync(args):
-    """Handle sync command - sync all configured repositories via git clone + symlinks."""
-    # Sync all repos (git clone + create symlinks)
+    """Handle sync command - recreate all symlinks from configured repos."""
     result = workflow_manager.sync_all()
 
     if result["status"] == "error":
@@ -220,8 +211,7 @@ def cmd_sync(args):
             else:
                 print(f"  Skipped.")
 
-    print(f"\nRepos: {workflow_manager.get_repos_path()}")
-    print(f"Skills: {workflow_manager.get_global_skills_path()}")
+    print(f"\nSkills: {workflow_manager.get_global_skills_path()}")
     print(f"Workflows: {workflow_manager.get_global_workflows_path()}")
 
     return 0 if result["status"] == "success" else 1
@@ -235,13 +225,13 @@ def cmd_list():
 
     if not repos:
         print("No repositories configured.")
-        print("Use 'wfm repo add <name> <owner/repo>' to add one.")
+        print("Use 'wfm repo add <name> <path>' to add one.")
         return 0
 
     print("Configured Repositories:")
     for name, repo in repos.items():
-        repo_path = workflow_manager.get_repos_path() / name
-        status = "cloned" if repo_path.exists() else "not cloned"
+        repo_path = workflow_manager.get_repo_local_path(name, repo)
+        status = "ok" if repo_path.exists() else "path not found"
         print(f"  {name}: {repo} ({status})")
     print()
 
@@ -290,7 +280,6 @@ def cmd_list():
 def cmd_status():
     """Handle status command - show configuration and paths."""
     from wfm import platform as plat
-    import subprocess
 
     print("=== WFM Status ===")
     print()
@@ -298,34 +287,21 @@ def cmd_status():
     # Paths
     print("Paths:")
     print(f"  Config:    {workflow_manager.get_wfm_config_path()}")
-    print(f"  Repos:     {workflow_manager.get_repos_path()}")
     print(f"  Skills:    {workflow_manager.get_global_skills_path()}")
     print(f"  Workflows: {workflow_manager.get_global_workflows_path()}")
     print()
 
-    # Repos with git status
+    # Repos
     repos = workflow_manager.get_configured_repos()
     if repos:
         print(f"Repositories ({len(repos)}):")
         for name, repo in repos.items():
-            repo_path = workflow_manager.get_repos_path() / name
+            repo_path = workflow_manager.get_repo_local_path(name, repo)
             if repo_path.exists():
-                # Get git status
-                try:
-                    result = subprocess.run(
-                        ["git", "status", "--porcelain"],
-                        cwd=str(repo_path),
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    changes = len(result.stdout.strip().split("\n")) if result.stdout.strip() else 0
-                    status = f"{changes} changes" if changes > 0 else "clean"
-                except Exception:
-                    status = "unknown"
-                print(f"  {name}: {repo} [{status}]")
+                status = "ok"
             else:
-                print(f"  {name}: {repo} [not cloned]")
+                status = "path not found"
+            print(f"  {name}: {repo} [{status}]")
     else:
         print("No repositories configured.")
     print()
@@ -432,7 +408,7 @@ def cmd_self_update():
         return 0
 
     print()
-    print(f"Updating {current_version} → {latest_version}...")
+    print(f"Updating {current_version} -> {latest_version}...")
 
     # Download wheel from GitHub releases
     import tempfile
@@ -478,23 +454,29 @@ def cmd_self_update():
 
 
 def cmd_repo_add(args):
-    """Handle repo add command - adds repo to config and clones it."""
-    # Add to config
-    result = workflow_manager.add_repo(args.name, args.repo)
+    """Handle repo add command - adds a local repo path to config and creates symlinks."""
+    from pathlib import Path
+
+    # Resolve the path
+    repo_path = Path(args.path).expanduser().resolve()
+    if not repo_path.exists():
+        print(f"[ERROR] Path does not exist: {repo_path}")
+        return 1
+
+    # Add to config (store as forward-slash path for portability)
+    result = workflow_manager.add_repo(args.name, str(repo_path).replace("\\", "/"))
     if result["status"] != "success":
         print(f"[ERROR] {result['message']}")
         return 1
 
     print(f"[OK] {result['message']}")
 
-    # Clone and create symlinks
-    print(f"Cloning {args.repo}...")
-    sync_result = workflow_manager.sync_repo(args.name, args.repo)
+    # Create symlinks
+    sync_result = workflow_manager.sync_repo(args.name, str(repo_path).replace("\\", "/"))
 
     if sync_result["status"] == "success":
         skills = sync_result.get("skills_synced", [])
         workflows = sync_result.get("workflows_synced", [])
-        print(f"[OK] Cloned to {sync_result.get('repo_path')}")
         if skills:
             print(f"  Skills: {', '.join(skills)}")
         if workflows:
@@ -506,7 +488,7 @@ def cmd_repo_add(args):
 
 
 def cmd_repo_remove(args):
-    """Handle repo remove command - removes repo, symlinks, and cloned folder."""
+    """Handle repo remove command - removes repo config and symlinks."""
     result = workflow_manager.remove_repo(args.name)
     if result["status"] == "success":
         print(f"[OK] {result['message']}")
@@ -516,8 +498,6 @@ def cmd_repo_remove(args):
             print(f"  Removed skill links: {', '.join(removed_skills)}")
         if removed_workflows:
             print(f"  Removed workflow links: {', '.join(removed_workflows)}")
-        if result.get("removed_repo_path"):
-            print(f"  Removed repo: {result['removed_repo_path']}")
         return 0
     else:
         print(f"[ERROR] {result['message']}")
@@ -529,66 +509,12 @@ def cmd_repo_list():
     repos = workflow_manager.get_configured_repos()
     if not repos:
         print("No repositories configured.")
-        print("Use 'wfm repo add <name> <owner/repo>' to add one.")
+        print("Use 'wfm repo add <name> <path>' to add one.")
         return 0
 
     print("Configured Repositories:")
     for name, repo in repos.items():
         print(f"  {name}: {repo}")
-    return 0
-
-
-def cmd_repo_pull():
-    """Handle repo pull command - git pull all repositories."""
-    import subprocess
-
-    repos = workflow_manager.get_configured_repos()
-
-    if not repos:
-        print("No repositories configured.")
-        return 0
-
-    print("Pulling all repositories...")
-    errors = []
-
-    for name, repo in repos.items():
-        repo_path = workflow_manager.get_repos_path() / name
-
-        if not repo_path.exists():
-            print(f"  {name}: not cloned (run 'wfm sync' first)")
-            continue
-
-        try:
-            result = subprocess.run(
-                ["git", "pull"],
-                cwd=str(repo_path),
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode == 0:
-                output = result.stdout.strip()
-                if "Already up to date" in output:
-                    print(f"  {name}: up to date")
-                else:
-                    print(f"  {name}: updated")
-            else:
-                print(f"  {name}: FAILED - {result.stderr.strip()}")
-                errors.append(name)
-
-        except subprocess.TimeoutExpired:
-            print(f"  {name}: FAILED - timeout")
-            errors.append(name)
-        except Exception as e:
-            print(f"  {name}: FAILED - {e}")
-            errors.append(name)
-
-    if errors:
-        print(f"\n[WARN] {len(errors)} repo(s) failed to pull")
-        return 1
-
-    print("\n[OK] All repositories pulled")
     return 0
 
 

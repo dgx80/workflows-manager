@@ -91,12 +91,17 @@ def get_configured_repos() -> dict[str, str]:
     return config.get("repos", {})
 
 
+def get_repo_local_path(name: str, repo: str) -> "Path":
+    """Get the local path for a repo."""
+    return Path(repo).expanduser().resolve()
+
+
 def add_repo(name: str, repo: str) -> dict:
     """Add a repository to the config.
 
     Args:
         name: Short name for the repo (used as skill prefix)
-        repo: GitHub repo path (e.g., "owner/repo")
+        repo: GitHub repo path (e.g., "owner/repo") or local path
 
     Returns:
         Result dict with status and message
@@ -160,23 +165,12 @@ def remove_repo(name: str) -> dict:
     # Remove all symlinks for this repo
     links_result = remove_repo_links(name)
 
-    # Remove the cloned repo directory
-    repos_path = get_repos_path()
-    repo_path = repos_path / name
-    if repo_path.exists():
-        def _on_rm_error(func, path, exc_info):
-            """Handle read-only files (e.g., .git objects on Windows)."""
-            os.chmod(path, 0o777)
-            func(path)
-        shutil.rmtree(repo_path, onexc=_on_rm_error)
-
     if write_wfm_config(config):
         return {
             "status": "success",
             "message": f"Removed repository '{name}' ({removed_repo})",
             "removed_skills": links_result.get("removed_skills", []),
             "removed_workflows": links_result.get("removed_workflows", []),
-            "removed_repo_path": str(repo_path)
         }
     return {
         "status": "error",
@@ -228,10 +222,6 @@ def get_global_claude_path() -> Path:
     """Get the global ~/.claude/ directory path."""
     return Path.home() / ".claude"
 
-
-def get_repos_path() -> Path:
-    """Get the repos directory path (~/.claude/repos/)."""
-    return get_global_claude_path() / "repos"
 
 
 def get_global_skills_path() -> Path:
@@ -934,37 +924,27 @@ def sync(version: str | None = None, branch: str | None = None) -> dict:
 
 
 def sync_repo(name: str, repo: str) -> dict:
-    """Sync a single repository using git clone + symlinks.
-
-    1. Clone repo to ~/.claude/repos/{name}/ if not present
-    2. Create symlinks for skills and workflows
+    """Sync a single repository by creating symlinks from a local path.
 
     Args:
         name: Short name for the repo (used as skill prefix)
-        repo: GitHub repo path (e.g., "owner/repo")
+        repo: Local path to the repository
 
     Returns:
         Result dict with status and details
     """
-    repos_path = get_repos_path()
-    repo_path = repos_path / name
+    repo_path = get_repo_local_path(name, repo)
 
-    # 1. Clone if missing
-    if not repo_path.exists() or not (repo_path / ".git").exists():
-        clone_result = clone_repo(name, repo)
-        if clone_result["status"] == "error":
-            return {
-                "status": "error",
-                "repo_name": name,
-                "repo": repo,
-                "message": clone_result.get("message", "Clone failed")
-            }
+    if not repo_path.exists():
+        return {
+            "status": "error",
+            "repo_name": name,
+            "repo": repo,
+            "message": f"Path does not exist: {repo_path}"
+        }
 
-    # 2. Create skill links
-    skills_created = create_skill_links(name)
-
-    # 3. Create workflow links
-    workflows_created = create_workflow_links(name)
+    skills_created = create_skill_links(name, repo_path)
+    workflows_created = create_workflow_links(name, repo_path)
 
     return {
         "status": "success",
@@ -1301,64 +1281,6 @@ def needs_config_migration() -> bool:
 # Symlink-based Repo Sync (v3.0)
 # =============================================================================
 
-def clone_repo(name: str, repo: str) -> dict:
-    """Clone a GitHub repo to ~/.claude/repos/{name}/.
-
-    Args:
-        name: Short name for the repo (e.g., "cicd")
-        repo: GitHub repo path (e.g., "dgx80/cicd-workflow")
-
-    Returns:
-        Result dict with status and path
-    """
-    repos_path = get_repos_path()
-    repo_path = repos_path / name
-
-    # Create repos directory if needed
-    repos_path.mkdir(parents=True, exist_ok=True)
-
-    # Skip if already cloned
-    if repo_path.exists() and (repo_path / ".git").exists():
-        return {
-            "status": "already_exists",
-            "path": repo_path,
-            "message": f"Repository already cloned at {repo_path}"
-        }
-
-    # Clone the repository
-    repo_url = f"https://github.com/{repo}.git"
-
-    try:
-        result = subprocess.run(
-            ["git", "clone", repo_url, str(repo_path)],
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"Git clone failed: {result.stderr}"
-            }
-
-        return {
-            "status": "success",
-            "path": repo_path,
-            "message": f"Cloned {repo} to {repo_path}"
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "Git clone timed out"
-        }
-    except FileNotFoundError:
-        return {
-            "status": "error",
-            "message": "Git not found. Please install Git."
-        }
-
 
 def get_ignored_skills() -> list[str]:
     """Get list of ignored skills from wfm.json."""
@@ -1392,21 +1314,20 @@ def ignore_workflow(workflow_name: str) -> None:
     write_wfm_config(config)
 
 
-def create_skill_links(repo_name: str) -> list[str]:
+def create_skill_links(repo_name: str, repo_path: "Path") -> list[str]:
     """Create symlinks/junctions for skills from a repo.
 
-    Creates links: ~/.claude/skills/{repo_name}-{skill} -> ~/.claude/repos/{repo_name}/skills/{skill}
+    Creates links: ~/.claude/skills/{repo_name}-{skill} -> {repo_path}/skills/{skill}
 
     Args:
         repo_name: Name of the repo (e.g., "cicd")
+        repo_path: Path to the repo root
 
     Returns:
         List of created skill link names
     """
     from wfm import platform as plat
 
-    repos_path = get_repos_path()
-    repo_path = repos_path / repo_name
     repo_skills_path = repo_path / "skills"
     global_skills_path = get_global_skills_path()
 
@@ -1421,8 +1342,11 @@ def create_skill_links(repo_name: str) -> list[str]:
     # Create links for each skill in the repo
     for skill_dir in repo_skills_path.iterdir():
         if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-            # Use directory name as-is, prefixed with repo name
-            link_name = f"{repo_name}-{skill_dir.name}"
+            # Skip prefix if skill name already starts with repo name
+            if skill_dir.name.startswith(f"{repo_name}-"):
+                link_name = skill_dir.name
+            else:
+                link_name = f"{repo_name}-{skill_dir.name}"
             link_path = global_skills_path / link_name
 
             try:
@@ -1434,21 +1358,20 @@ def create_skill_links(repo_name: str) -> list[str]:
     return created
 
 
-def create_workflow_links(repo_name: str) -> list[str]:
+def create_workflow_links(repo_name: str, repo_path: "Path") -> list[str]:
     """Create symlinks/junctions for workflows from a repo.
 
-    Creates links: ~/.claude/workflows/{repo_name}-{workflow} -> ~/.claude/repos/{repo_name}/workflows/{workflow}
+    Creates links: ~/.claude/workflows/{repo_name}-{workflow} -> {repo_path}/workflows/{workflow}
 
     Args:
         repo_name: Name of the repo (e.g., "cicd")
+        repo_path: Path to the repo root
 
     Returns:
         List of created workflow link names
     """
     from wfm import platform as plat
 
-    repos_path = get_repos_path()
-    repo_path = repos_path / repo_name
     repo_workflows_path = repo_path / "workflows"
     global_workflows_path = get_global_workflows_path()
 
@@ -1463,8 +1386,11 @@ def create_workflow_links(repo_name: str) -> list[str]:
     # Create links for each workflow in the repo
     for wf_dir in repo_workflows_path.iterdir():
         if wf_dir.is_dir() and (wf_dir / "workflow.md").exists():
-            # Create link name with repo prefix
-            link_name = f"{repo_name}-{wf_dir.name}"
+            # Skip prefix if workflow name already starts with repo name
+            if wf_dir.name.startswith(f"{repo_name}-"):
+                link_name = wf_dir.name
+            else:
+                link_name = f"{repo_name}-{wf_dir.name}"
             link_path = global_workflows_path / link_name
 
             try:
@@ -1592,10 +1518,11 @@ def adopt_skill(skill_name: str, repo_name: str) -> dict:
     from wfm import platform as plat
 
     skills_path = get_global_skills_path()
-    repos_path = get_repos_path()
+    repos = get_configured_repos()
+    repo = repos.get(repo_name, "")
 
     skill_path = skills_path / skill_name
-    repo_path = repos_path / repo_name
+    repo_path = get_repo_local_path(repo_name, repo)
     repo_skills_path = repo_path / "skills"
 
     # Validate
@@ -1649,10 +1576,11 @@ def adopt_workflow(workflow_name: str, repo_name: str) -> dict:
     from wfm import platform as plat
 
     workflows_path = get_global_workflows_path()
-    repos_path = get_repos_path()
+    repos = get_configured_repos()
+    repo = repos.get(repo_name, "")
 
     workflow_path = workflows_path / workflow_name
-    repo_path = repos_path / repo_name
+    repo_path = get_repo_local_path(repo_name, repo)
     repo_workflows_path = repo_path / "workflows"
 
     # Validate
