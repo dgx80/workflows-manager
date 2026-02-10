@@ -434,6 +434,19 @@ def cmd_self_update():
             print(f"[ERROR] Failed to download wheel: {e}")
             return 1
 
+        # On Windows, rename the running exe so uv can replace it
+        old_exe = None
+        if sys.platform == "win32":
+            current_exe = shutil.which("wfm")
+            if current_exe and os.path.exists(current_exe):
+                old_exe = current_exe + ".old"
+                try:
+                    if os.path.exists(old_exe):
+                        os.remove(old_exe)
+                    os.rename(current_exe, old_exe)
+                except OSError:
+                    old_exe = None  # Rename failed, try install anyway
+
         # Install wheel
         if shutil.which("uv"):
             cmd = ["uv", "tool", "install", "--force", wheel_path]
@@ -443,12 +456,30 @@ def cmd_self_update():
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
+                # Clean up old exe
+                if old_exe and os.path.exists(old_exe):
+                    try:
+                        os.remove(old_exe)
+                    except OSError:
+                        pass  # Will be cleaned up next run
                 print(f"[OK] Updated to {latest_version}")
                 return 0
             else:
+                # Restore old exe on failure
+                if old_exe and os.path.exists(old_exe):
+                    current_exe = old_exe[:-4]  # Remove .old
+                    try:
+                        os.rename(old_exe, current_exe)
+                    except OSError:
+                        pass
                 print(f"[ERROR] Update failed: {result.stderr}")
                 return 1
         except Exception as e:
+            if old_exe and os.path.exists(old_exe):
+                try:
+                    os.rename(old_exe, old_exe[:-4])
+                except OSError:
+                    pass
             print(f"[ERROR] Update failed: {e}")
             return 1
 
