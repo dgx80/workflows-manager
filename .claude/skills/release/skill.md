@@ -38,12 +38,13 @@ git branch --show-current
 
 ### Step 2: Bump version
 - Edit `pyproject.toml`: update `version = "X.Y.Z"` to the new version
+- Edit `wfm/__init__.py`: update the fallback `__version__ = "X.Y.Z"` to the new version
 - Validate the version format matches semver (X.Y.Z)
 
 ### Step 3: Create branch and commit
 ```bash
 git checkout -b release/v<version>
-git add pyproject.toml
+git add pyproject.toml wfm/__init__.py
 git commit -m "chore: release v<version>"
 ```
 

@@ -240,6 +240,17 @@ jobs:
       - name: Install dependencies
         run: pip install pyinstaller pyyaml
 
+      - name: Inject version into __init__.py
+        shell: bash
+        run: |
+          python -c "
+          version = '${{ needs.create-release.outputs.version_clean }}'
+          content = open('wfm/__init__.py').read()
+          import re
+          content = re.sub(r'__version__ = \".*?\"', f'__version__ = \"{version}\"', content)
+          open('wfm/__init__.py', 'w').write(content)
+          "
+
       - name: Build executable
         run: pyinstaller --onefile --name wfm wfm/cli.py
 
