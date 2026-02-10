@@ -241,6 +241,7 @@ jobs:
         run: pip install pyinstaller pyyaml
 
       - name: Inject version into __init__.py
+        shell: bash
         run: |
           python -c "
           version = '${{ needs.create-release.outputs.version_clean }}'
