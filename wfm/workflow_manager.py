@@ -6,7 +6,7 @@ Architecture v3.0 (Global Everything):
     ~/.claude/
     ├── skills/cicd-*/SKILL.md   # Global skills
     ├── workflows/               # Global workflows
-    ├── schemas/                 # Global schemas
+    ├── wfm.json                 # Repo config
     ├── cicd.yaml                # Global config (source repo, version)
     └── .cicd-version            # Installed version
 
@@ -28,15 +28,12 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
-import zipfile
 from pathlib import Path
 
 import yaml
 
 # GitHub repository for cicd-workflow (default)
 CICD_WORKFLOW_REPO = "dgx80/cicd-workflow"
-CICD_WORKFLOW_URL = f"https://github.com/{CICD_WORKFLOW_REPO}"
 
 
 # =============================================================================
@@ -234,9 +231,6 @@ def get_global_workflows_path() -> Path:
     return get_global_claude_path() / "workflows"
 
 
-def get_global_schemas_path() -> Path:
-    """Get the global schemas directory path (~/.claude/schemas/)."""
-    return get_global_claude_path() / "schemas"
 
 
 def get_global_config_path() -> Path:
@@ -416,41 +410,6 @@ def install_skills(source_path: Path, version: str | None = None, prefix: str | 
     }
 
 
-def install_core(source_path: Path, version: str | None = None) -> dict:
-    """Install workflows and schemas from source to ~/.claude/."""
-    workflows_path = get_global_workflows_path()
-    schemas_path = get_global_schemas_path()
-
-    installed_workflows = []
-    installed_schemas = []
-
-    # Install workflows
-    source_workflows = source_path / "workflows"
-    if source_workflows.exists():
-        if workflows_path.exists():
-            shutil.rmtree(workflows_path)
-        shutil.copytree(source_workflows, workflows_path)
-        installed_workflows = [d.name for d in workflows_path.iterdir() if d.is_dir()]
-
-    # Install schemas
-    source_schemas = source_path / "schemas"
-    if source_schemas.exists():
-        if schemas_path.exists():
-            shutil.rmtree(schemas_path)
-        shutil.copytree(source_schemas, schemas_path)
-        installed_schemas = [f.name for f in schemas_path.iterdir() if f.is_file()]
-
-    # Write version file
-    version_file = get_global_claude_path() / ".cicd-version"
-    version_file.write_text(version or "unknown")
-
-    return {
-        "status": "success",
-        "workflows": installed_workflows,
-        "schemas": installed_schemas,
-        "workflows_count": len(installed_workflows),
-        "schemas_count": len(installed_schemas)
-    }
 
 
 def convert_command_to_skill(content: str, skill_name: str) -> str:
@@ -505,179 +464,6 @@ def get_installed_version(project_root: Path | None = None) -> str | None:
     return None
 
 
-def get_latest_version(repo: str | None = None) -> str | None:
-    """Get the latest release version from GitHub.
-
-    Args:
-        repo: GitHub repo path (e.g., "owner/repo"). Defaults to CICD_WORKFLOW_REPO.
-    """
-    target_repo = repo or CICD_WORKFLOW_REPO
-    try:
-        result = subprocess.run(
-            ["gh", "release", "view", "--repo", target_repo, "--json", "tagName"],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return data.get("tagName")
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        pass
-    return None
-
-
-def download_release(version: str | None = None, target_dir: Path | None = None, repo: str | None = None) -> dict:
-    """Download a release from GitHub.
-
-    Args:
-        version: Specific version tag (e.g., "v0.2.0")
-        target_dir: Directory to download to
-        repo: GitHub repo path (e.g., "owner/repo"). Defaults to CICD_WORKFLOW_REPO.
-    """
-    target_repo = repo or CICD_WORKFLOW_REPO
-    if target_dir is None:
-        target_dir = Path(tempfile.mkdtemp())
-
-    # Build gh release download command
-    cmd = ["gh", "release", "download", "--repo", target_repo, "--archive", "zip", "--dir", str(target_dir)]
-    if version:
-        cmd.insert(3, version)
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"Failed to download release: {result.stderr}"
-            }
-
-        # Find the downloaded zip file
-        zip_files = list(target_dir.glob("*.zip"))
-        if not zip_files:
-            return {
-                "status": "error",
-                "message": "No zip file found after download"
-            }
-
-        # Extract the zip
-        zip_path = zip_files[0]
-        extract_dir = target_dir / "extracted"
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(extract_dir)
-
-        # Find the extracted directory
-        extracted_dirs = [d for d in extract_dir.iterdir() if d.is_dir()]
-        if not extracted_dirs:
-            return {
-                "status": "error",
-                "message": "No directory found in extracted archive"
-            }
-
-        # Get version from the downloaded release
-        actual_version = version
-        if not actual_version:
-            actual_version = get_latest_version(target_repo)
-
-        return {
-            "status": "success",
-            "path": extracted_dirs[0],
-            "version": actual_version,
-            "repo": target_repo,
-            "temp_dir": target_dir
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "Download timed out"
-        }
-    except FileNotFoundError:
-        return {
-            "status": "error",
-            "message": "gh CLI not found. Install GitHub CLI: https://cli.github.com/"
-        }
-
-
-def download_branch(branch: str, target_dir: Path | None = None, repo: str | None = None) -> dict:
-    """Download from a specific branch on GitHub.
-
-    Args:
-        branch: Branch name to download
-        target_dir: Directory to download to
-        repo: GitHub repo path (e.g., "owner/repo"). Defaults to CICD_WORKFLOW_REPO.
-    """
-    target_repo = repo or CICD_WORKFLOW_REPO
-    if target_dir is None:
-        target_dir = Path(tempfile.mkdtemp())
-
-    # Use gh api to download branch archive (pipe to file)
-    zip_path = target_dir / f"{branch.replace('/', '-')}.zip"
-
-    try:
-        # gh api outputs binary to stdout, redirect to file
-        with open(zip_path, 'wb') as f:
-            result = subprocess.run(
-                ["gh", "api", f"/repos/{target_repo}/zipball/{branch}"],
-                stdout=f,
-                stderr=subprocess.PIPE,
-                timeout=60
-            )
-
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "message": f"Failed to download branch '{branch}' from {target_repo}: {result.stderr.decode()}"
-            }
-
-        if not zip_path.exists() or zip_path.stat().st_size == 0:
-            return {
-                "status": "error",
-                "message": f"No zip file found after download"
-            }
-
-        # Extract the zip
-        extract_dir = target_dir / "extracted"
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(extract_dir)
-
-        # Find the extracted directory
-        extracted_dirs = [d for d in extract_dir.iterdir() if d.is_dir()]
-        if not extracted_dirs:
-            return {
-                "status": "error",
-                "message": "No directory found in extracted archive"
-            }
-
-        return {
-            "status": "success",
-            "path": extracted_dirs[0],
-            "version": f"branch:{branch}",
-            "temp_dir": target_dir
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "status": "error",
-            "message": "Download timed out"
-        }
-    except FileNotFoundError:
-        return {
-            "status": "error",
-            "message": "gh CLI not found. Install GitHub CLI: https://cli.github.com/"
-        }
-
-
-def is_initialized(project_root: Path | None = None) -> bool:
-    """Check if cicd is initialized globally."""
-    # v3.0: Check global installation
-    if is_skills_installed() and get_global_workflows_path().exists():
-        return True
-    # Legacy: check local .cicd/core/
-    cicd_path = get_project_cicd_path(project_root)
-    core_path = cicd_path / "core"
-    return core_path.exists() and (core_path / "workflows").exists()
-
 
 def _get_rules_template() -> str:
     """Return the default cicd-context.md template content."""
@@ -710,217 +496,6 @@ This file is automatically loaded by Claude Code and provides context to CICD sk
 <!-- Override or extend workflow behavior -->
 <!-- Example: skip certain validation steps, custom PR template, etc. -->
 """
-
-
-def init(project_root: Path | None = None, force: bool = False, version: str | None = None) -> dict:
-    """Initialize workflows in a project.
-
-    v3.0: Installs everything globally to ~/.claude/
-    - skills/ (skill definitions)
-    - workflows/ (workflow definitions)
-    - schemas/ (JSON schemas)
-
-    Creates minimal project structure in .cicd/ and .claude/rules/
-    """
-    if project_root is None:
-        project_root = Path.cwd()
-
-    cicd_path = get_project_cicd_path(project_root)
-    extends_path = cicd_path / "extends"
-    output_path = cicd_path / "output"
-    rules_path = project_root / ".claude" / "rules"
-
-    # Check if already initialized (global installation)
-    global_installed = is_skills_installed()
-    rules_file = rules_path / "cicd-context.md"
-
-    if global_installed and not force:
-        installed_version = get_global_installed_version()
-
-        # Even if initialized, create rules template if missing
-        if not rules_file.exists():
-            rules_path.mkdir(parents=True, exist_ok=True)
-            rules_file.write_text(_get_rules_template())
-            return {
-                "status": "success",
-                "message": f"Created project rules template ({installed_version or 'unknown'})",
-                "version": installed_version,
-                "project_rules_path": str(rules_file)
-            }
-
-        return {
-            "status": "already_initialized",
-            "message": f"Already initialized ({installed_version or 'unknown'}). Use --force to reinitialize.",
-            "version": installed_version
-        }
-
-    # Download from GitHub
-    download_result = download_release(version=version)
-    if download_result["status"] != "success":
-        return download_result
-
-    source_path = download_result["path"]
-    installed_version = download_result["version"]
-
-    # ==========================================================================
-    # v3.0: Install everything globally to ~/.claude/
-    # ==========================================================================
-    skills_result = install_skills(source_path, installed_version)
-    skills_installed = skills_result.get("count", 0)
-
-    core_result = install_core(source_path, installed_version)
-    workflows_installed = core_result.get("workflows_count", 0)
-
-    # ==========================================================================
-    # Create minimal project directory structure
-    # ==========================================================================
-    extends_path.mkdir(parents=True, exist_ok=True)
-    output_path.mkdir(parents=True, exist_ok=True)
-    (extends_path / "workflows").mkdir(exist_ok=True)
-    (extends_path / "knowledge").mkdir(exist_ok=True)
-
-    # Create default config.yaml if it doesn't exist
-    config_file = cicd_path / "config.yaml"
-    if not config_file.exists():
-        config_file.write_text("""# Project Configuration
-# Loaded by all workflows at runtime
-
-user_name: ""
-communication_language: "en"
-output_folder: ".cicd/output"
-
-# Git settings
-git:
-  auto_stage: false
-  default_branch: "main"
-  co_author: "Claude <noreply@anthropic.com>"
-""")
-
-    # ==========================================================================
-    # v3.0: Create project rules template
-    # ==========================================================================
-    rules_path.mkdir(parents=True, exist_ok=True)
-    if not rules_file.exists():
-        rules_file.write_text(_get_rules_template())
-
-    # Cleanup temp directory
-    if download_result.get("temp_dir"):
-        shutil.rmtree(download_result["temp_dir"], ignore_errors=True)
-
-    return {
-        "status": "success",
-        "message": f"Initialized ({skills_installed} skills, {workflows_installed} workflows, {installed_version})",
-        "skills_installed": skills_installed,
-        "workflows_installed": workflows_installed,
-        "version": installed_version,
-        "global_path": str(get_global_claude_path()),
-        "project_rules_path": str(rules_path)
-    }
-
-
-def update(project_root: Path | None = None, version: str | None = None) -> dict:
-    """Update global skills, workflows, and schemas from GitHub.
-
-    v3.0: Updates everything in ~/.claude/
-    Never touches .claude/rules/ (user customization)
-    """
-    # Check if anything is installed
-    global_installed = is_skills_installed()
-
-    if not global_installed:
-        return {
-            "status": "not_initialized",
-            "message": "Not initialized. Run 'cicd init' first."
-        }
-
-    # Get current version
-    current_version = get_global_installed_version()
-
-    # Check if update is needed
-    if version is None:
-        latest_version = get_latest_version()
-        if latest_version and latest_version == current_version:
-            return {
-                "status": "up_to_date",
-                "message": f"Already at latest version ({current_version})",
-                "version": current_version
-            }
-
-    # Download from GitHub
-    download_result = download_release(version=version)
-    if download_result["status"] != "success":
-        return download_result
-
-    source_path = download_result["path"]
-    new_version = download_result["version"]
-
-    # ==========================================================================
-    # v3.0: Update everything globally
-    # ==========================================================================
-    skills_result = install_skills(source_path, new_version)
-    skills_updated = skills_result.get("count", 0)
-
-    core_result = install_core(source_path, new_version)
-    workflows_updated = core_result.get("workflows_count", 0)
-
-    # Cleanup temp directory
-    if download_result.get("temp_dir"):
-        shutil.rmtree(download_result["temp_dir"], ignore_errors=True)
-
-    return {
-        "status": "success",
-        "message": f"Updated {current_version} → {new_version}: {skills_updated} skills, {workflows_updated} workflows",
-        "previous_version": current_version,
-        "version": new_version,
-        "skills_updated": skills_updated,
-        "workflows_updated": workflows_updated
-    }
-
-
-def sync(version: str | None = None, branch: str | None = None) -> dict:
-    """Force re-download and reinstall everything globally.
-
-    v3.0: Useful after manual changes or corruption.
-    Reinstalls skills, workflows, and schemas to ~/.claude/
-
-    Args:
-        version: Specific release version (e.g., v0.2.0)
-        branch: Download from a branch instead of release (e.g., feature/6-global-skills-architecture)
-    """
-    # Download from GitHub (branch or release)
-    if branch:
-        download_result = download_branch(branch=branch)
-    else:
-        download_result = download_release(version=version)
-
-    if download_result["status"] != "success":
-        return download_result
-
-    source_path = download_result["path"]
-    new_version = download_result["version"]
-
-    # Remove existing skills
-    skills_path = get_global_skills_path()
-    if skills_path.exists():
-        for skill_dir in skills_path.glob("cicd-*"):
-            if skill_dir.is_dir():
-                shutil.rmtree(skill_dir)
-
-    # Reinstall skills and core
-    skills_result = install_skills(source_path, new_version)
-    core_result = install_core(source_path, new_version)
-
-    # Cleanup temp directory
-    if download_result.get("temp_dir"):
-        shutil.rmtree(download_result["temp_dir"], ignore_errors=True)
-
-    return {
-        "status": "success",
-        "message": f"Synced {skills_result['count']} skills, {core_result['workflows_count']} workflows ({new_version})",
-        "skills_synced": skills_result.get("installed", []),
-        "workflows_synced": core_result.get("workflows", []),
-        "version": new_version
-    }
 
 
 def sync_repo(name: str, repo: str) -> dict:
