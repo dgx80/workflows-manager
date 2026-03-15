@@ -141,6 +141,19 @@ def remove_repo(name: str) -> dict:
     # Remove all symlinks for this repo
     links_result = remove_repo_links(name)
 
+    # Clean up knowledge junctions wfm created inside the repo's skill dirs
+    from wfm import platform as plat
+    repo_path = Path(removed_repo)
+    repo_skills = repo_path / "skills"
+    if repo_skills.exists():
+        for skill_dir in repo_skills.iterdir():
+            knowledge_link = skill_dir / "knowledge"
+            if plat.is_link(knowledge_link):
+                try:
+                    plat.remove_link(knowledge_link)
+                except Exception:
+                    pass
+
     if write_wfm_config(config):
         return {
             "status": "success",
@@ -174,6 +187,37 @@ def get_global_workflows_path() -> Path:
     return get_global_claude_path() / "workflows"
 
 
+def get_global_knowledge_path() -> Path:
+    """Get the global knowledge directory path (~/.claude/knowledge/)."""
+    return get_global_claude_path() / "knowledge"
+
+
+def sync_repo_knowledge(repo_path: Path) -> bool:
+    """Sync knowledge/ from repo root to ~/.claude/knowledge/ (issue #9).
+
+    Windows: creates a junction. Unix/Mac: creates a symlink.
+
+    Args:
+        repo_path: Path to the repo root
+
+    Returns:
+        True if knowledge/ was synced, False if repo has no knowledge/ folder
+    """
+    from wfm import platform as plat
+
+    repo_knowledge = repo_path / "knowledge"
+    if not repo_knowledge.is_dir():
+        return False
+
+    global_knowledge = get_global_knowledge_path()
+    try:
+        plat.create_link(repo_knowledge, global_knowledge)
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to create knowledge link: {e}")
+        return False
+
+
 
 
 def sync_repo(name: str, repo: str) -> dict:
@@ -198,6 +242,7 @@ def sync_repo(name: str, repo: str) -> dict:
 
     skills_created = create_skill_links(name, repo_path)
     workflows_created = create_workflow_links(name, repo_path)
+    knowledge_synced = sync_repo_knowledge(repo_path)
 
     return {
         "status": "success",
@@ -207,7 +252,8 @@ def sync_repo(name: str, repo: str) -> dict:
         "skills_synced": skills_created,
         "skills_count": len(skills_created),
         "workflows_synced": workflows_created,
-        "workflows_count": len(workflows_created)
+        "workflows_count": len(workflows_created),
+        "knowledge_synced": knowledge_synced,
     }
 
 
@@ -352,6 +398,19 @@ def create_skill_links(repo_name: str, repo_path: "Path") -> list[str]:
                 created.append(link_name)
             except Exception as e:
                 print(f"Warning: Failed to create link for {link_name}: {e}")
+                continue
+
+            # Create knowledge junction inside skill dir (issues #8/#10).
+            # On Windows, git symlinks inside skill dirs are stored as text files.
+            # wfm creates a real junction so knowledge/ resolves correctly.
+            knowledge_target = repo_path / "knowledge"
+            if knowledge_target.exists():
+                knowledge_link = skill_dir / "knowledge"
+                if not plat.is_link(knowledge_link) and not knowledge_link.exists():
+                    try:
+                        plat.create_link(knowledge_target, knowledge_link)
+                    except Exception as e:
+                        print(f"Warning: Failed to create knowledge link in {skill_dir.name}: {e}")
 
     return created
 
