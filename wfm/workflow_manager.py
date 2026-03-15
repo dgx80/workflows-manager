@@ -1,39 +1,18 @@
-"""Workflow manager for cicd CLI.
+"""Workflow manager for wfm CLI.
 
-Manages installation, update, and resolution of workflows and skills.
+Manages skills and workflows from multiple local repositories via symlinks.
 
-Architecture v3.0 (Global Everything):
+Architecture:
     ~/.claude/
-    ├── skills/cicd-*/SKILL.md   # Global skills
-    ├── workflows/               # Global workflows
-    ├── wfm.json                 # Repo config
-    ├── cicd.yaml                # Global config (source repo, version)
-    └── .cicd-version            # Installed version
-
-    project/
-    ├── .claude/rules/cicd-context.md  # Auto-loaded project context
-    └── .cicd/
-        ├── config.yaml     # Project configuration
-        ├── extends/        # Project extensions (priority)
-        │   ├── workflows/  # Custom workflows or overrides
-        │   └── knowledge/  # Project-specific knowledge
-        └── output/         # Generated outputs (plans, etc.)
-
-Source repository: https://github.com/dgx80/cicd-workflow
+    ├── wfm.json       # Repo config (name -> local path)
+    ├── skills/        # Symlinks to repo skills
+    └── workflows/     # Symlinks to repo workflows
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shutil
-import subprocess
 from pathlib import Path
-
-import yaml
-
-# GitHub repository for cicd-workflow (default)
-CICD_WORKFLOW_REPO = "dgx80/cicd-workflow"
 
 
 # =============================================================================
@@ -50,7 +29,7 @@ def read_wfm_config() -> dict:
 
     Returns:
         dict with 'repos' key containing name->repo mappings
-        Example: {"repos": {"cicd": "dgx80/cicd-workflow", "other": "user/other-repo"}}
+        Example: {"repos": {"myrepo": "/path/to/repo", "other": "/path/to/other"}}
     """
     config_path = get_wfm_config_path()
     if config_path.exists():
@@ -82,7 +61,7 @@ def get_configured_repos() -> dict[str, str]:
     """Get all configured repositories.
 
     Returns:
-        dict mapping repo name to repo path (e.g., {"cicd": "dgx80/cicd-workflow"})
+        dict mapping repo name to local path (e.g., {"myrepo": "/path/to/repo"})
     """
     config = read_wfm_config()
     return config.get("repos", {})
@@ -175,50 +154,14 @@ def remove_repo(name: str) -> dict:
     }
 
 
-def detect_skill_conflicts() -> dict:
-    """Detect potential skill name conflicts across repos.
-
-    Since skills are namespaced by repo prefix, this checks for:
-    - Skills that would have the same base name (e.g., cicd-architect and other-architect)
-
-    Returns:
-        Dict with conflicts info
-    """
-    skills_by_base_name: dict[str, list[str]] = {}
-    skills = list_global_skills_with_repo()
-
-    for skill_name, info in skills.items():
-        # Extract base name (part after the prefix)
-        if "-" in skill_name:
-            base_name = skill_name.split("-", 1)[1]
-        else:
-            base_name = skill_name
-
-        if base_name not in skills_by_base_name:
-            skills_by_base_name[base_name] = []
-        skills_by_base_name[base_name].append(skill_name)
-
-    # Find base names with multiple skills (not conflicts, but overlapping functionality)
-    overlapping = {
-        base: skill_list for base, skill_list in skills_by_base_name.items()
-        if len(skill_list) > 1
-    }
-
-    return {
-        "status": "success",
-        "overlapping_skills": overlapping,
-        "has_overlaps": len(overlapping) > 0
-    }
-
 
 # =============================================================================
-# Global Paths (v2.0)
+# Global Paths
 # =============================================================================
 
 def get_global_claude_path() -> Path:
     """Get the global ~/.claude/ directory path."""
     return Path.home() / ".claude"
-
 
 
 def get_global_skills_path() -> Path:
@@ -231,271 +174,6 @@ def get_global_workflows_path() -> Path:
     return get_global_claude_path() / "workflows"
 
 
-
-
-def get_global_config_path() -> Path:
-    """Get the global cicd config path (~/.claude/cicd.yaml)."""
-    return get_global_claude_path() / "cicd.yaml"
-
-
-# =============================================================================
-# Global Config Handler (v2.0)
-# =============================================================================
-
-def read_global_config() -> dict:
-    """Read global cicd config from ~/.claude/cicd.yaml."""
-    config_path = get_global_config_path()
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except (yaml.YAMLError, OSError):
-            return {}
-    return {}
-
-
-def write_global_config(config: dict) -> bool:
-    """Write global cicd config to ~/.claude/cicd.yaml."""
-    config_path = get_global_config_path()
-    try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-        return True
-    except OSError:
-        return False
-
-
-def get_global_installed_version() -> str | None:
-    """Get the globally installed cicd-workflow version."""
-    config = read_global_config()
-    return config.get("installed_version")
-
-
-def update_global_config_version(version: str) -> bool:
-    """Update the version in global config."""
-    from datetime import datetime
-    config = read_global_config()
-    config["version"] = "1.0"
-    config["source_repo"] = CICD_WORKFLOW_REPO
-    config["installed_version"] = version
-    config["last_updated"] = datetime.now().strftime("%Y-%m-%d")
-    return write_global_config(config)
-
-
-# =============================================================================
-# Skills Management (v2.0)
-# =============================================================================
-
-def is_skills_installed() -> bool:
-    """Check if global skills are installed."""
-    skills_path = get_global_skills_path()
-    if not skills_path.exists():
-        return False
-    # Check for at least one cicd-* skill
-    cicd_skills = list(skills_path.glob("cicd-*"))
-    return len(cicd_skills) > 0
-
-
-def list_global_skills() -> list[str]:
-    """List all installed global skills."""
-    skills_path = get_global_skills_path()
-    if not skills_path.exists():
-        return []
-    return [d.name for d in skills_path.iterdir()
-            if d.is_dir() and (d / "SKILL.md").exists()]
-
-
-def list_global_skills_with_repo() -> dict[str, dict]:
-    """List all installed global skills with their repo source.
-
-    Returns:
-        Dict mapping skill name to info dict with 'repo' key.
-        Example: {"cicd-architect": {"repo": "cicd"}, "other-coder": {"repo": "other"}}
-    """
-    skills_path = get_global_skills_path()
-    repos = get_configured_repos()
-
-    if not skills_path.exists():
-        return {}
-
-    skills = {}
-    for skill_dir in skills_path.iterdir():
-        if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-            skill_name = skill_dir.name
-            # Determine repo from prefix
-            repo_name = "unknown"
-            if "-" in skill_name:
-                prefix = skill_name.split("-", 1)[0]
-                if prefix in repos:
-                    repo_name = prefix
-            skills[skill_name] = {"repo": repo_name}
-
-    return skills
-
-
-def install_skills(source_path: Path, version: str | None = None, prefix: str | None = None) -> dict:
-    """Install skills from source to ~/.claude/skills/.
-
-    Args:
-        source_path: Path to extracted repo
-        version: Version string
-        prefix: Skill name prefix (e.g., "cicd" for "cicd-architect").
-                If None, keeps original skill names.
-    """
-    skills_path = get_global_skills_path()
-    skills_path.mkdir(parents=True, exist_ok=True)
-
-    # Look for skills in source (either skills/ or .claude/commands/)
-    source_skills = source_path / "skills"
-    source_commands = source_path / ".claude" / "commands"
-
-    installed = []
-
-    if source_skills.exists():
-        # New format: skills/{prefix}-*/SKILL.md
-        for skill_dir in source_skills.iterdir():
-            if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-                # Get base skill name (remove any existing prefix like "cicd-")
-                original_name = skill_dir.name
-                base_name = original_name
-                if "-" in original_name:
-                    # Remove existing prefix (e.g., "cicd-architect" -> "architect")
-                    base_name = original_name.split("-", 1)[1]
-
-                # Apply new prefix if provided
-                if prefix:
-                    new_name = f"{prefix}-{base_name}"
-                else:
-                    new_name = original_name
-
-                dst_dir = skills_path / new_name
-                if dst_dir.exists():
-                    shutil.rmtree(dst_dir)
-                shutil.copytree(skill_dir, dst_dir)
-                installed.append(new_name)
-    elif source_commands.exists():
-        # Legacy format: .claude/commands/*.md -> convert to skills
-        for cmd_file in source_commands.glob("*.md"):
-            original_name = cmd_file.stem
-            base_name = original_name
-            if "-" in original_name:
-                base_name = original_name.split("-", 1)[1]
-
-            # Apply new prefix if provided
-            if prefix:
-                skill_name = f"{prefix}-{base_name}"
-            else:
-                skill_name = original_name
-
-            skill_dir = skills_path / skill_name
-            skill_dir.mkdir(parents=True, exist_ok=True)
-
-            # Read command content and convert to SKILL.md format
-            content = cmd_file.read_text(encoding="utf-8")
-            skill_content = convert_command_to_skill(content, skill_name)
-
-            (skill_dir / "SKILL.md").write_text(skill_content, encoding="utf-8")
-            installed.append(skill_name)
-
-    # Update global config
-    if version:
-        update_global_config_version(version)
-
-    return {
-        "status": "success",
-        "installed": installed,
-        "count": len(installed),
-        "prefix": prefix
-    }
-
-
-
-
-def convert_command_to_skill(content: str, skill_name: str) -> str:
-    """Convert .claude/commands/*.md format to skills/*/SKILL.md format."""
-    # Extract first line as description (usually "# Title - Description")
-    lines = content.strip().split("\n")
-    description = skill_name.replace("cicd-", "CICD ").title()
-
-    if lines and lines[0].startswith("# "):
-        title_line = lines[0][2:].strip()
-        if " - " in title_line:
-            description = title_line.split(" - ", 1)[1]
-        else:
-            description = title_line
-
-    # Create SKILL.md with frontmatter
-    skill_content = f"""---
-description: "{description}"
----
-
-{content}
-
-## Project Context
-
-This skill reads project-specific configuration from:
-- `.claude/rules/cicd-context.md` (auto-loaded)
-- `.cicd/extends/knowledge/` (legacy support)
-
-Adapt behavior based on project context.
-"""
-    return skill_content
-
-
-def get_project_cicd_path(project_root: Path | None = None) -> Path:
-    """Get the .cicd path for the current project."""
-    if project_root is None:
-        project_root = Path.cwd()
-    return project_root / ".cicd"
-
-
-def get_installed_version(project_root: Path | None = None) -> str | None:
-    """Get the installed cicd-workflow version (legacy - checks local .cicd/core/)."""
-    # First check global version
-    global_version = get_global_installed_version()
-    if global_version:
-        return global_version
-    # Fallback to legacy local version
-    cicd_path = get_project_cicd_path(project_root)
-    version_file = cicd_path / "core" / ".version"
-    if version_file.exists():
-        return version_file.read_text().strip()
-    return None
-
-
-
-def _get_rules_template() -> str:
-    """Return the default cicd-context.md template content."""
-    return """# CICD Project Context
-
-This file is automatically loaded by Claude Code and provides context to CICD skills.
-
-## Stack
-
-<!-- Define your tech stack here -->
-- Language:
-- Framework:
-- Database:
-
-## Tests
-
-<!-- Define test commands -->
-- Unit tests: `npm test` or `pytest`
-- Lint: `npm run lint` or `ruff check`
-
-## Conventions
-
-<!-- Define coding conventions -->
-- Code style:
-- Commit format: conventional commits (feat:, fix:, etc.)
-- Branch naming: feature/{issue}-{slug}
-
-## Workflows
-
-<!-- Override or extend workflow behavior -->
-<!-- Example: skip certain validation steps, custom PR template, etc. -->
-"""
 
 
 def sync_repo(name: str, repo: str) -> dict:
@@ -597,263 +275,8 @@ def sync_all() -> dict:
     }
 
 
-def list_workflows(project_root: Path | None = None) -> dict:
-    """List all available workflows with their source (global/extends)."""
-    global_workflows_path = get_global_workflows_path()
-    cicd_path = get_project_cicd_path(project_root)
-    extends_path = cicd_path / "extends"
-
-    workflows = {}
-
-    # Collect global workflows
-    if global_workflows_path.exists():
-        for wf_dir in global_workflows_path.iterdir():
-            if wf_dir.is_dir() and (wf_dir / "workflow.md").exists():
-                workflows[wf_dir.name] = {"source": "global", "overridden": False}
-
-    # Collect extends workflows (override global)
-    extends_workflows = extends_path / "workflows"
-    if extends_workflows.exists():
-        for wf_dir in extends_workflows.iterdir():
-            if wf_dir.is_dir() and (wf_dir / "workflow.md").exists():
-                is_override = wf_dir.name in workflows
-                if is_override:
-                    workflows[wf_dir.name]["overridden"] = True
-                workflows[wf_dir.name] = {"source": "extends", "overridden": is_override}
-
-    return {
-        "status": "success",
-        "workflows": workflows,
-        "initialized": is_skills_installed(),
-        "version": get_global_installed_version()
-    }
-
-
-def status(project_root: Path | None = None) -> dict:
-    """Show which workflows are overridden."""
-    listing = list_workflows(project_root)
-
-    if listing["status"] != "success":
-        return listing
-
-    overridden_workflows = {
-        name: info for name, info in listing["workflows"].items()
-        if info.get("overridden") or info["source"] == "extends"
-    }
-
-    return {
-        "status": "success",
-        "overridden_workflows": overridden_workflows,
-        "total_workflows": len(listing["workflows"]),
-        "initialized": listing["initialized"],
-        "version": listing["version"]
-    }
-
-
-def _file_hash(path: Path) -> str:
-    """Calculate MD5 hash of a file."""
-    hasher = hashlib.md5()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
 # =============================================================================
-# Migration Support (v2.0)
-# =============================================================================
-
-def has_legacy_commands(project_root: Path | None = None) -> bool:
-    """Check if project has old .claude/commands/ structure."""
-    if project_root is None:
-        project_root = Path.cwd()
-    commands_path = project_root / ".claude" / "commands"
-    if commands_path.exists():
-        cicd_commands = list(commands_path.glob("cicd-*.md"))
-        return len(cicd_commands) > 0
-    return False
-
-
-def detect_migration_needed(project_root: Path | None = None) -> dict:
-    """Detect if migration from old structure is needed."""
-    if project_root is None:
-        project_root = Path.cwd()
-
-    has_legacy = has_legacy_commands(project_root)
-    has_global_skills = is_skills_installed()
-    has_project_rules = (project_root / ".claude" / "rules" / "cicd-context.md").exists()
-
-    needs_migration = has_legacy and not has_global_skills
-
-    return {
-        "needs_migration": needs_migration,
-        "has_legacy_commands": has_legacy,
-        "has_global_skills": has_global_skills,
-        "has_project_rules": has_project_rules,
-        "recommendation": "Run 'cicd migrate' to upgrade to global skills" if needs_migration else None
-    }
-
-
-def migrate(project_root: Path | None = None, remove_legacy: bool = False) -> dict:
-    """Migrate from old .claude/commands/ to global skills.
-
-    Steps:
-    1. Convert .claude/commands/cicd-*.md to ~/.claude/skills/cicd-*/SKILL.md
-    2. Create .claude/rules/cicd-context.md template
-    3. Optionally remove old .claude/commands/cicd-*.md files
-    """
-    if project_root is None:
-        project_root = Path.cwd()
-
-    commands_path = project_root / ".claude" / "commands"
-    rules_path = project_root / ".claude" / "rules"
-    skills_path = get_global_skills_path()
-
-    # Check if migration is needed
-    if not has_legacy_commands(project_root):
-        return {
-            "status": "not_needed",
-            "message": "No legacy commands found. Nothing to migrate."
-        }
-
-    if is_skills_installed():
-        return {
-            "status": "already_migrated",
-            "message": "Global skills already installed. Use 'cicd sync' to update."
-        }
-
-    # Find legacy command files
-    legacy_files = list(commands_path.glob("cicd-*.md"))
-    if not legacy_files:
-        return {
-            "status": "not_needed",
-            "message": "No cicd-* command files found."
-        }
-
-    # Create skills directory
-    skills_path.mkdir(parents=True, exist_ok=True)
-
-    migrated = []
-    for cmd_file in legacy_files:
-        skill_name = cmd_file.stem  # e.g., "cicd-architect"
-        skill_dir = skills_path / skill_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-
-        # Read and convert content
-        content = cmd_file.read_text(encoding="utf-8")
-        skill_content = convert_command_to_skill(content, skill_name)
-
-        # Write SKILL.md
-        (skill_dir / "SKILL.md").write_text(skill_content, encoding="utf-8")
-        migrated.append(skill_name)
-
-    # Create project rules template
-    rules_path.mkdir(parents=True, exist_ok=True)
-    cicd_context_file = rules_path / "cicd-context.md"
-    if not cicd_context_file.exists():
-        cicd_context_file.write_text(_get_rules_template())
-
-    # Create global config
-    from datetime import datetime
-    write_global_config({
-        "version": "1.0",
-        "source_repo": CICD_WORKFLOW_REPO,
-        "installed_version": "migrated",
-        "last_updated": datetime.now().strftime("%Y-%m-%d"),
-        "migrated_from": str(project_root)
-    })
-
-    # Optionally remove legacy files
-    removed = []
-    if remove_legacy:
-        for cmd_file in legacy_files:
-            cmd_file.unlink()
-            removed.append(cmd_file.name)
-
-    return {
-        "status": "success",
-        "message": f"Migrated {len(migrated)} skills to global location",
-        "migrated_skills": migrated,
-        "rules_created": str(cicd_context_file),
-        "removed_files": removed if remove_legacy else [],
-        "global_skills_path": str(skills_path)
-    }
-
-
-def migrate_config_to_wfm() -> dict:
-    """Migrate from old cicd.yaml single-repo config to wfm.json multi-repo format.
-
-    Converts:
-        ~/.claude/cicd.yaml with source_repo: "owner/repo"
-    To:
-        ~/.claude/wfm.json with repos: {"cicd": "owner/repo"}
-
-    Returns:
-        Result dict with status and message
-    """
-    old_config_path = get_global_config_path()  # ~/.claude/cicd.yaml
-    new_config_path = get_wfm_config_path()     # ~/.claude/wfm.json
-
-    # Check if already migrated
-    if new_config_path.exists():
-        return {
-            "status": "already_migrated",
-            "message": "wfm.json already exists. No migration needed."
-        }
-
-    # Check if old config exists
-    if not old_config_path.exists():
-        # No old config, create default wfm.json
-        default_config = {
-            "repos": {
-                "cicd": CICD_WORKFLOW_REPO
-            }
-        }
-        if write_wfm_config(default_config):
-            return {
-                "status": "success",
-                "message": f"Created default wfm.json with cicd -> {CICD_WORKFLOW_REPO}"
-            }
-        return {
-            "status": "error",
-            "message": "Failed to create wfm.json"
-        }
-
-    # Read old config
-    old_config = read_global_config()
-    source_repo = old_config.get("source_repo", CICD_WORKFLOW_REPO)
-
-    # Create new config with repo named "cicd" (for backward compatibility)
-    new_config = {
-        "repos": {
-            "cicd": source_repo
-        },
-        "migrated_from": "cicd.yaml",
-        "migrated_version": old_config.get("installed_version")
-    }
-
-    if write_wfm_config(new_config):
-        return {
-            "status": "success",
-            "message": f"Migrated cicd.yaml to wfm.json: cicd -> {source_repo}",
-            "old_config": str(old_config_path),
-            "new_config": str(new_config_path)
-        }
-    return {
-        "status": "error",
-        "message": "Failed to write wfm.json"
-    }
-
-
-def needs_config_migration() -> bool:
-    """Check if migration from cicd.yaml to wfm.json is needed."""
-    old_config_path = get_global_config_path()
-    new_config_path = get_wfm_config_path()
-    return old_config_path.exists() and not new_config_path.exists()
-
-
-# =============================================================================
-# Symlink-based Repo Sync (v3.0)
+# Symlink-based Repo Sync
 # =============================================================================
 
 
@@ -895,7 +318,7 @@ def create_skill_links(repo_name: str, repo_path: "Path") -> list[str]:
     Creates links: ~/.claude/skills/{repo_name}-{skill} -> {repo_path}/skills/{skill}
 
     Args:
-        repo_name: Name of the repo (e.g., "cicd")
+        repo_name: Name of the repo (e.g., "myrepo")
         repo_path: Path to the repo root
 
     Returns:
@@ -939,7 +362,7 @@ def create_workflow_links(repo_name: str, repo_path: "Path") -> list[str]:
     Creates links: ~/.claude/workflows/{repo_name}-{workflow} -> {repo_path}/workflows/{workflow}
 
     Args:
-        repo_name: Name of the repo (e.g., "cicd")
+        repo_name: Name of the repo (e.g., "myrepo")
         repo_path: Path to the repo root
 
     Returns:
@@ -981,7 +404,7 @@ def remove_repo_links(repo_name: str) -> dict:
     """Remove all symlinks/junctions for a repo.
 
     Args:
-        repo_name: Name of the repo (e.g., "cicd")
+        repo_name: Name of the repo (e.g., "myrepo")
 
     Returns:
         Dict with removed skills and workflows counts

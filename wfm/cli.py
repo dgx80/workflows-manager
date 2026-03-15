@@ -108,7 +108,7 @@ def print_help():
     print("  wfm self-update             Update wfm CLI")
     print()
     print("Quick start:")
-    print("  wfm repo add cicd C:/Users/me/dev/cicd-workflow")
+    print("  wfm repo add myrepo C:/Users/me/dev/my-skills-repo")
     print("  wfm sync")
     print()
     print("Architecture:")
